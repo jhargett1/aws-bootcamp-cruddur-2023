@@ -39,9 +39,8 @@ The top 5 security best practices are:
 ### 4. Recreate Conceptual Diagram in Lucid Charts or on a Napkin
 https://lucid.app/lucidchart/a23d495e-d367-4f7e-b41e-090b0e2e98a4/edit?viewport_loc=24%2C-218%2C2121%2C1002%2C0_0&invitationId=inv_626b6276-548c-4e72-8a1d-29598c13f588
 ![CruddurConceptualDiagram](https://user-images.githubusercontent.com/119984652/218616444-5ff352f4-008e-4585-a248-79383a33f0b5.png)
+
 ![ConceptualDiagramNapkin](https://user-images.githubusercontent.com/119984652/218879745-8d64950c-3fe7-4a0b-af40-0d4849909440.jpg)
-
-
 
 ### 5. Recreate Logical Architectual Diagram in Lucid Charts
 https://lucid.app/lucidchart/42e9a5ef-bafe-4ff7-92e5-264c773c3829/edit?viewport_loc=-301%2C-46%2C3182%2C1504%2C0_0&invitationId=inv_53f96b63-6dae-4f9a-8a3d-637af5300228
