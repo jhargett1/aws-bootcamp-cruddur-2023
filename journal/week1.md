@@ -1,4 +1,5 @@
 # Week 1 — App Containerization
+
 ### Watch How to Ask for Technical Help
 In this video, Andrew explained details of what to do if/when we run into any issues while working on our homework during the bootcamp. Screenshots, in depth researching, and various attempts at fixing should be made prior to reaching out for any assistance as it will at least indicate we're trying to fix it and not just waiting to be told what to do. 
 
@@ -16,6 +17,7 @@ I followed along with Chirag by checking my resources within AWS and Gitpod. Sin
 
 ### Watched Ashish's Week 1 - Container Security Considerations
 For Ashish's video this week, much like last week, I kept notes of what was covered. Here's my notes:
+
 ```
 AWS Week 1 Notes
 Container security – practice of protecting your applications hosted on compute services like Containers. Common examples of applications can be Single Page Applications (SPAs), Microservices, APIs, etc.
@@ -64,6 +66,7 @@ Image Vulnerability Scanning:
 -	Clair – OpenSource
 -	Snyk - OpenSource
 ```
+
 ### Containerize Application (Dockerfiles, Docker Compose)
 For this video, I finalized the containerization of the app following along with the rest of the live stream.
 
@@ -72,7 +75,7 @@ In this task, we created the openapi-3.0.yml file as a standard for defining API
 
 We added a new section to the document:
 
-```
+```yml
   /api/activities/notifications:
     get:
       description: 'Return a feed of activity for all of those that I follow'
@@ -92,22 +95,22 @@ We added a new section to the document:
 
 To write a Flask Backend Endpoint for Notifications, we selected the app.py file and added the following to create a micro service:
 
-```
+```Python
 
 from services.notifications_activities import * 
 
 ```
 This was added added for the endpoint as well to define a route in the Flask app:
 
-```
+```Python
 @app.route("/api/activities/notifications", methods=['GET'])
 def data_notifications():
   data = NotificationsActivities.run()
   return data, 200
 ```
-We then defined the micro service notifications_activies.py:
+We then defined the micro service notifications_activites.py:
 
-```
+```Python
 from datetime import datetime, timedelta, timezone
 class NotificationsActivities:
   def run():
@@ -138,13 +141,13 @@ class NotificationsActivities:
 
 For the Frontend, to implement the notifications tab, we went to the frontend-react-js folder. We accessed app.js, and added something new to import:
 
-```
+```Javascript
 import NotificationsFeedPage from './pages/NotificationsFeedPage';
 ```
 
 Using react-router, we added a new path for the element:
 
-```
+```Javascript
   {
     path: "/notifications",
     element: <NotificationsFeedPage />
@@ -153,7 +156,7 @@ Using react-router, we added a new path for the element:
 
 Then under pages, we created the pages NotificationsFeedPage.js and NotificationsFeedPage.css. We then opened the HomeFeedPage.js and copied and pasted the contents, editing it to reflect the different page:
 
-```
+```Javascript
 import './NotificationsFeedPage.css';
 import React from "react";
 
@@ -248,7 +251,7 @@ For this video, I followed along with Andrew as we added DynamoDB local and Post
 
 #### Postgres
 
-```
+```yml
 services:
   db:
     image: postgres:13-alpine
@@ -307,7 +310,7 @@ I also tried to run the Dockerfile CMD as an external script. Here's what I did:
 
 2. Added the following code to "myscript.sh":
 
-```Docker
+```bash
 #!/bin/bash
 docker run -p 4567:4567 myimage python3 -m flask run --host=0.0.0.0 --port=4567
 ```
