@@ -67,5 +67,318 @@ Image Vulnerability Scanning:
 ### Containerize Application (Dockerfiles, Docker Compose)
 For this video, I finalized the containerization of the app following along with the rest of the live stream.
 
-### Document the Notification Endpoint for the OpenAPI Document
+### Document the Notification Endpoint for the OpenAPI Document, Write a Flask Backend Endpoint for Notifications, and Write a React Page for Notifications
+In this task, we created the openapi-3.0.yml file as a standard for defining APIs. The API is providing us with mock data, as there's currently no database hooked to the backend. 
 
+We added a new section to the document:
+
+```
+  /api/activities/notifications:
+    get:
+      description: 'Return a feed of activity for all of those that I follow'
+      tags:
+        - activities
+      parameters: []
+      responses:
+        '200':
+          description: Returns an array of activities
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Activity'
+```
+
+To write a Flask Backend Endpoint for Notifications, we selected the app.py file and added the following to create a micro service:
+
+```
+
+from services.notifications_activities import * 
+
+```
+This was added added for the endpoint as well to define a route in the Flask app:
+
+```
+@app.route("/api/activities/notifications", methods=['GET'])
+def data_notifications():
+  data = NotificationsActivities.run()
+  return data, 200
+```
+We then defined the micro service notifications_activies.py:
+
+```
+from datetime import datetime, timedelta, timezone
+class NotificationsActivities:
+  def run():
+    now = datetime.now(timezone.utc).astimezone()
+    results = [{
+      'uuid': '68f126b0-1ceb-4a33-88be-d90fa7109eee',
+      'handle':  'coco',
+      'message': 'I am white unicorn',
+      'created_at': (now - timedelta(days=2)).isoformat(),
+      'expires_at': (now + timedelta(days=5)).isoformat(),
+      'likes_count': 5,
+      'replies_count': 1,
+      'reposts_count': 0,
+      'replies': [{
+        'uuid': '26e12864-1c26-5c3a-9658-97a10f8fea67',
+        'reply_to_activity_uuid': '68f126b0-1ceb-4a33-88be-d90fa7109eee',
+        'handle':  'Worf',
+        'message': 'This post has no honor!',
+        'likes_count': 0,
+        'replies_count': 0,
+        'reposts_count': 0,
+        'created_at': (now - timedelta(days=2)).isoformat()
+      }],
+    },
+    ]
+    return results
+```
+
+For the Frontend, to implement the notifications tab, we went to the frontend-react-js folder. We accessed app.js, and added something new to import:
+
+```
+import NotificationsFeedPage from './pages/NotificationsFeedPage';
+```
+
+Using react-router, we added a new path for the element:
+
+```
+  {
+    path: "/notifications",
+    element: <NotificationsFeedPage />
+  },
+```
+
+Then under pages, we created the pages NotificationsFeedPage.js and NotificationsFeedPage.css. We then opened the HomeFeedPage.js and copied and pasted the contents, editing it to reflect the different page:
+
+```
+import './NotificationsFeedPage.css';
+import React from "react";
+
+import DesktopNavigation  from '../components/DesktopNavigation';
+import DesktopSidebar     from '../components/DesktopSidebar';
+import ActivityFeed from '../components/ActivityFeed';
+import ActivityForm from '../components/ActivityForm';
+import ReplyForm from '../components/ReplyForm';
+
+// [TODO] Authenication
+import Cookies from 'js-cookie'
+
+export default function NotificationsFeedPage() {
+  const [activities, setActivities] = React.useState([]);
+  const [popped, setPopped] = React.useState(false);
+  const [poppedReply, setPoppedReply] = React.useState(false);
+  const [replyActivity, setReplyActivity] = React.useState({});
+  const [user, setUser] = React.useState(null);
+  const dataFetchedRef = React.useRef(false);
+
+  const loadData = async () => {
+    try {
+      const backend_url = `${process.env.REACT_APP_BACKEND_URL}/api/activities/notifications`
+      const res = await fetch(backend_url, {
+        method: "GET"
+      });
+      let resJson = await res.json();
+      if (res.status === 200) {
+        setActivities(resJson)
+      } else {
+        console.log(res)
+      }
+    } catch (err) {
+      console.log(err);
+    }
+  };
+
+  const checkAuth = async () => {
+    console.log('checkAuth')
+    // [TODO] Authenication
+    if (Cookies.get('user.logged_in')) {
+      setUser({
+        display_name: Cookies.get('user.name'),
+        handle: Cookies.get('user.username')
+      })
+    }
+  };
+
+  React.useEffect(()=>{
+    //prevents double call
+    if (dataFetchedRef.current) return;
+    dataFetchedRef.current = true;
+
+    loadData();
+    checkAuth();
+  }, [])
+
+  return (
+    <article>
+      <DesktopNavigation user={user} active={'notifications'} setPopped={setPopped} />
+      <div className='content'>
+        <ActivityForm  
+          popped={popped}
+          setPopped={setPopped} 
+          setActivities={setActivities} 
+        />
+        <ReplyForm 
+          activity={replyActivity} 
+          popped={poppedReply} 
+          setPopped={setPoppedReply} 
+          setActivities={setActivities} 
+          activities={activities} 
+        />
+        <ActivityFeed 
+          title="Notifications" 
+          setReplyActivity={setReplyActivity} 
+          setPopped={setPoppedReply} 
+          activities={activities} 
+        />
+      </div>
+      <DesktopSidebar user={user} />
+    </article>
+  );
+}
+```
+
+We then committed the code. 
+
+### Run DynamoDB Local Container and ensure it works and Run Postgres Container and ensure it works
+
+For this video, I followed along with Andrew as we added DynamoDB local and Postgres as containers, by adding the following code to our Docker compose file: 
+
+#### Postgres
+
+```
+services:
+  db:
+    image: postgres:13-alpine
+    restart: always
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=password
+    ports:
+      - '5432:5432'
+    volumes: 
+      - db:/var/lib/postgresql/data
+```
+
+#### DynamoDB Local
+
+```yml
+services:
+  dynamodb-local:
+    # https://stackoverflow.com/questions/67533058/persist-local-dynamodb-data-in-volumes-lack-permission-unable-to-open-databa
+    # We needed to add user:root to get this working.
+    user: root
+    command: "-jar DynamoDBLocal.jar -sharedDb -dbPath ./data"
+    image: "amazon/dynamodb-local:latest"
+    container_name: dynamodb-local
+    ports:
+      - "8000:8000"
+    volumes:
+      - "./docker/dynamodb:/home/dynamodblocal/data"
+    working_dir: /home/dynamodblocal
+```
+
+Then at the bottom of the docker-compose.yml file, we added the rest of the Postgress code for the volumes:
+
+```yml
+volumes:
+  db:
+    driver: local
+```
+
+Additionally, I also did several of the homework challenges. 
+
+
+### Push and tag a image to DockerHub (they have a free tier)
+
+I followed along with the tutorial provided by Docker Hub and pushed and tagged an image to DockerHub.
+
+![DockerHubTutorial](https://user-images.githubusercontent.com/119984652/220816299-2d22198d-a5cd-4025-be91-209af33eba61.png)
+
+Link: https://hub.docker.com/r/jhargett1/docker101tutorial
+
+### Run the dockerfile CMD as an external script
+
+I also tried to run the Dockerfile CMD as an external script. Here's what I did:
+
+1. Created a script file called "myscript.sh" in the backend-flask directory. 
+
+2. Added the following code to "myscript.sh":
+
+```Docker
+#!/bin/bash
+docker run -p 4567:4567 myimage python3 -m flask run --host=0.0.0.0 --port=4567
+```
+3. I made "myscript.sh" executable by adding the following:
+
+```bash
+chmod +x myscript.sh
+```
+4. From Terminal, I ran: 
+
+```bash
+docker build -t myimage .
+```
+At this point, I was getting an error on step 4. I was getting "unable to prepare context: unable to evaluate symlinks in Dockerfile path: lstat /workspace/DockerTutorialsandTesting/Dockerfile: no such file or directory." As it turned out, I needed to CD over to the correct directory. 
+
+5. With this corrected, I then tried running the script:
+
+```bash
+./myscript.sh
+```
+At this point, it returned an error of "Unable to find image 'myimage:latest' locally
+docker: Error response from daemon: pull access denied for myimage, repository does not exist or may require 'docker login': denied: requested access to the resource is denied." I realized that the image isn't actually called myimage:latest. I needed to rebuild. 
+
+```bash
+docker build -t aws-bootcamp-cruddur-2023-backend-flask:latest .
+```
+
+6. From there, I made it an executable:
+
+```bash
+chmod +x myscript.sh
+```
+
+7. I then tried running the script:
+
+```bash
+./myscript.sh
+```
+I received a lot of debugging messages, but I believe this worked, as when I tried accessing via the backend port, I got a 404 error. I can see from the code the request worked as well: 
+
+```bash
+'FLASK_ENV' is deprecated and will not be used in Flask 2.3. Use 'FLASK_DEBUG' instead.
+'FLASK_ENV' is deprecated and will not be used in Flask 2.3. Use 'FLASK_DEBUG' instead.
+'FLASK_ENV' is deprecated and will not be used in Flask 2.3. Use 'FLASK_DEBUG' instead.
+ * Debug mode: on
+WARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.
+ * Running on all addresses (0.0.0.0)
+ * Running on http://127.0.0.1:4567
+ * Running on http://172.17.0.2:4567
+Press CTRL+C to quit
+ * Restarting with stat
+'FLASK_ENV' is deprecated and will not be used in Flask 2.3. Use 'FLASK_DEBUG' instead.
+'FLASK_ENV' is deprecated and will not be used in Flask 2.3. Use 'FLASK_DEBUG' instead.
+'FLASK_ENV' is deprecated and will not be used in Flask 2.3. Use 'FLASK_DEBUG' instead.
+ * Debugger is active!
+ * Debugger PIN: 626-519-123
+192.168.41.202 - - [23/Feb/2023 02:33:36] "GET / HTTP/1.1" 404 -
+192.168.41.202 - - [23/Feb/2023 02:33:36] "GET /favicon.ico HTTP/1.1" 404 -
+```
+
+After this, since I couldn't figure out a way to get this to work within the bootcamp, I removed the "myscript.sh" file and removed the comment tag from the CMD command in the Dockerfile. 
+
+### Implement a healthcheck in the V3 Docker compose file
+
+I was also able to find a basic healthcheck to run from the docker-compose.yml file:
+
+```yml
+    healthcheck:
+      test: curl --fail http://localhost || exit 1
+      interval: 60s
+      retries: 5
+      start_period: 20s
+      timeout: 10s
+```
