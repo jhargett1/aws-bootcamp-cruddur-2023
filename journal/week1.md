@@ -385,3 +385,53 @@ I was also able to find a basic healthcheck to run from the docker-compose.yml f
       start_period: 20s
       timeout: 10s
 ```
+### Additional work 
+Found I was getting an exit code 127 when frontend-react-js runs and my site was inaccessible when running the docker-compose.yml file. After digging into the issue I was able to find a solution suggested by others in our Discord channel. Instead of this in the front-end-js Dockerfile:
+
+```Docker
+FROM node:16.18
+
+ENV PORT=3000
+
+COPY . /frontend-react-js
+WORKDIR /frontend-react-js
+RUN npm install
+EXPOSE ${PORT}
+CMD ["npm", "start"]
+```
+
+I needed this:
+
+```Docker
+FROM node:16.18
+
+WORKDIR /node
+COPY package.json package-lock.json ./
+
+RUN npm ci
+
+WORKDIR /node/app
+COPY . .
+
+EXPOSE ${PORT}
+
+ENV PORT=3000
+CMD ["npm", "start"]
+```
+
+From what I understand, if the volume is mounted from the host, it overrides the installed node_modules. Additionally, I added 
+
+```yml
+    volumes:
+      - ./frontend-react-js:/frontend-react-js
+      - /frontend-react-js/node_modules # <- this line
+```
+
+To the "Volumes" section of the docker-compose.yml file. This tells Docker to create a second volume in addition to the one we already have. I was able to gather this information from a really helpful post by @Sergio on Discord. He added: 
+
+Why do we do this?
+
+- By adding the - /frontend-react-js/node_modules line, we are telling Docker to create a second volume (an anonymous volume) in addition to the one we already have, ./frontend-react-js:/frontend-react-js.
+- When the containers are run, the Docker engine will use this secondary volume (/frontend-react-js/node-modules) to access the dependencies needed by the React application.
+- This means that we no longer need to access the resources on our local computer. We only need the resources in the Docker container.
+- As a result, we can remove the need for Node or any other local dependencies entirely.
