@@ -435,3 +435,133 @@ Why do we do this?
 - When the containers are run, the Docker engine will use this secondary volume (/frontend-react-js/node-modules) to access the dependencies needed by the React application.
 - This means that we no longer need to access the resources on our local computer. We only need the resources in the Docker container.
 - As a result, we can remove the need for Node or any other local dependencies entirely.
+
+### Cloud Careers - Roles for FREE AWS Cloud Project Bootcamp
+
+I watched Lou's video regarding Cloud Careers and found it very insightful as it opened my mind to approaching this from a different perspective. For the homework Lou assigned, he asked we find 5 jobs online in our local market, fill out the "My Journey to the Cloud!" form, and then begin analyzing each job by asking ourselves questions. Are the skills I wrote down chohesive? Do the skills I wrote down align with my goal/the job I'm viewing? Are the skills I wrote down duplicate skills? Also, what category would this job actually fall under? Is it what it says it is or is it actually more of an analyst/manager role? 
+
+![image](https://user-images.githubusercontent.com/119984652/221321889-3c599e01-945c-4916-9345-1b3c87b589b9.png)
+
+#### My Journey to the Cloud! 
+I am going to become a: Cloud Engineer
+
+I am a good fit because: previous IT experience
+
+I will know:
+<ol>
+ <li>Azure/AWS</li>
+ <li>Python</li>
+ <li>Terraform</li>
+ <li>Docker</li>
+ <li>Git Actions</li>
+</ol>
+
+I will not get distracted by: 
+ <ol>
+  <li>Certification chasing</li>
+  <li>C#, Javascript</li>
+  <li>ARM templates</li>
+  <li>Hyper-V</li>
+  <li>Other CI/CD toolings</li>
+ </ol>
+ 
+ In analyzing what I answered the questions on the form with, I began asking myself the questions on the Skills Roadmap Golden Rules:
+ <ul>
+ <li>Are skills "cohesive"?</li>
+ After viewing the Cloud Engineer technical skills from https://openupthecloud.github.io/system , all of the skills I listed are cohesive.
+ <li>Aligns with your goal</li>
+ These skills fall entirely in line with my goals of becoming a cloud engineer, especially since the skills match.
+ <li>Is not a "duplicate" skill</li>
+ Azure/AWS is questionaable, but since I'm familiar in both, I plan to continue learning in both. 
+ </ul>
+ 
+ I then reviewed the documentation Lou provided [here.](https://thedevcoach-landing-pages.s3.eu-central-1.amazonaws.com/cdn/Your_Perfect_Cloud_Role_4_Questions_To_Get_Clarity_On_Your_Cloud_Journey.pdf)
+ 
+ Next, I went to LinkedIn and began searching job postings. I searched specifically for "cloud engineer" as I knew it would yield various results. Here's what I found: 
+
+### Job Description 1
+
+![CloudEngineerJob1](https://user-images.githubusercontent.com/119984652/221323543-45f77e23-5248-4b15-a7e0-6d36a9000009.png)
+ 
+Let's break this down versus what I listed:
+I will know:
+<ol>
+ <li>Azure/AWS - the listing specifically mentions Azure </li>
+ <li>Python - no mention of any programming languages at all </li>
+ <li>Terraform - no mention of Terraform or any other IaaC </li>
+ <li>Docker - no mention at all of containerization services </li>
+ <li>Git Actions - no knowledge of CI/CD pipelines at all </li>
+</ol>
+
+From the looks of this job description, this is more of a support based role, specifically utilizing Azure and the VMWare Cloud Provider Stack. This role does not match up well with my goals.
+
+### Job Description 2
+
+![CloudEngineerJob2](https://user-images.githubusercontent.com/119984652/221323986-4c062cc4-8e8f-4ddb-921a-e7d8e0918e8f.png)
+ 
+Let's break this down versus what I listed:
+I will know:
+<ol>
+ <li>Azure/AWS - experience with any of the big 3 cloud providers </li>
+ <li>Python - experience with Python/C/C++/Java </li>
+ <li>Terraform - no mention of Terraform or any other IaaC </li>
+ <li>Docker - no mention at all of containerization services </li>
+ <li>Git Actions - mention of experience with version control </li>
+</ol>
+
+This job description appears to line up a bit more with my goals. There's also mention of API development, along with data storage, analytics, and big data handling, so this would fall under my umbrella, albeit a bit heavy on the data analyst/data engineer side of things. If I wanted to work towards this role, I would need to adjust my focus a bit to topics a bit more data driven. 
+
+### Job Description 3
+
+![CloudEngineerJob3](https://user-images.githubusercontent.com/119984652/221324397-263061c3-8344-49a1-ac8c-07ca58df7a8b.png)
+
+ 
+Let's break this down versus what I listed:
+I will know:
+<ol>
+ <li>Azure/AWS - experience with Azure is specified </li>
+ <li>Python - experience with .NET is specified </li>
+ <li>Terraform - experience with Terraform is mentioned </li>
+ <li>Docker - Kubernetes is mentioned </li>
+ <li>Git Actions - experience with CI/CD solutions mentioned </li>
+</ol>
+
+So far, this is probably the closest to form in roles that would line up for me. The only slight variance is C# instead of Python, but experience with one OOL is just as useful as any other and would likely be taken into consideration. This is a solid match. 
+
+### Job Description 4
+
+![CloudEngineerJob4](https://user-images.githubusercontent.com/119984652/221324642-0f27cba6-372c-4cf1-a989-fcd0a07e815c.png)
+
+ 
+Let's break this down versus what I listed:
+I will know:
+<ol>
+ <li>Azure/AWS - experience with any of the big 3 cloud providers </li>
+ <li>Python - Python, Go, or a similar language </li>
+ <li>Terraform - experience with IaaC </li>
+ <li>Docker - no containerization mentioned </li>
+ <li>Git Actions - no version control experience </li>
+</ol>
+
+This one seems like it would be a pretty good fit with the skills I provided too. There's a mention of "storage and networking configuration options" knowledge, but I'm thinking this is more cloud storage options and not Docker or any other type of containerization. I would apply to this job. 
+
+### Job Description 5
+
+![CloudEngineerJob5](https://user-images.githubusercontent.com/119984652/221324864-daadf5ad-6892-40f9-8042-be61fef1dd9f.png)
+
+ 
+Let's break this down versus what I listed:
+I will know:
+<ol>
+ <li>Azure/AWS - experience with AWS is mentioned specifically </li>
+ <li>Python - Python, TypeScript, or Java </li>
+ <li>Terraform - Ansible is mentioned specifically, but Terraform is mentioned for scripting </li>
+ <li>Docker - no containerization mentioned </li>
+ <li>Git Actions - CI/CD tooling such as Azure DevOps </li>
+</ol>
+
+I think this one matches up fairly decent as well. Again, I feel since it's specifically mentioned a couple of times, I would need to shift goals a bit to include Ansible, but given my current goals, I think I would pass on this particular role. One day I will come back to Ansible. 
+
+
+
+
