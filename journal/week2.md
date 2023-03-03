@@ -1,7 +1,8 @@
 # Week 2 — Distributed Tracing
 
 ## Watch Week 2 Live-Stream Video
-### Followed along with Jessica and Andrew as we added installation instructions by adding the following files to our 'requirements.txt'
+
+Followed along with Jessica and Andrew as we added installation instructions by adding the following files to our 'requirements.txt'
 
 ```
 opentelemetry-api 
@@ -102,7 +103,7 @@ provider.add_span_processor(processor)
 
 ```
 
-### Instrument X-Ray
+## Instrument X-Ray
 
 We added the X-Ray Daemon (Andrew kept pronouncing it "day-mon" which is how I had thought it was pronounced too, but he said it's actually pronounced "dee-mon" lol) and defined environment variables for X-Ray in our 'docker-compose.yml' file: 
 
@@ -290,7 +291,7 @@ from aws_xray_sdk.core import xray_recorder
 
 ```
 
-### Configure custom logger to send to CloudWatch Logs
+## Configure custom logger to send to CloudWatch Logs
 
 In this additional video, Andrew showed us how to implement Cloudwatch Logs. We added instructions to 'requirements.txt' : 
 
@@ -338,7 +339,7 @@ class HomeActivities:
 
 We also went through and commented out our code for X-Ray so it would not throw errors. After Andrew showed us how Cloudwatch worked, we then went back and commented out our Cloudwatch code as well, so as to not incur additional cost when spinning up our environment. 
 
-### Integrate Rollbar and capture and error
+## Integrate Rollbar and capture and error
 
 In this lesson, we started with Rollbar by adding instructions to 'requirements.txt' : 
 
@@ -391,7 +392,7 @@ Running 'pip install -r requirements.txt' to install our Python dependencies, An
 
 ![RollbarError](https://user-images.githubusercontent.com/119984652/222852467-2aae5e1f-85e2-4490-97a2-88bd73922a22.png)
 
-### Watched Ashish's Week 2 - Observability Security Considerations
+## Watched Ashish's Week 2 - Observability Security Considerations
 
 I watched Ashish's video on security considerations this week focusing on Observability. For this, I kept very detailed notes: 
 
@@ -492,13 +493,13 @@ Event Drive Security
 
 ```
 
-### Watch Chirag Week 2 - Spending Considerations
+## Watch Chirag Week 2 - Spending Considerations
 
 I listened to Chriag, as he laid out spending considerations for Observability. With Honeycomb using the free tier, a user is allotted 20 million events per month. With Rollbar's free tier, you're given 5,000 error events monthly. AWS X-Ray gives us 100,000 traces per month, always for free. Rounding us out, AWS Cloudwatch provides a meager 10 custom metrics and alarms per month, but does provide 5GB of Log Data Ingestion and 5GB of Log Data Archive. 
 
-### Additional video content and Stretch Homework
+## Additional video content and Stretch Homework
 
-#### How to setup GitHub Codespaces
+### How to setup GitHub Codespaces
 
 Andrew was gracious enough to walk us through how to setup GitHub Codespaces for those of us that are running low or out of credits through GitPod. To do so, first we need to cycle out our key from the AWS console since we don't have the key notated, which we did. Next, we need to add a .devcontainer directory, then create a 'devcontainer.json' file: 
 
@@ -526,7 +527,9 @@ Andrew was gracious enough to walk us through how to setup GitHub Codespaces for
 
 	// Uncomment to connect as an existing user other than the container default. More info: https://aka.ms/dev-containers-non-root.
 	// "remoteUser": "devcontainer"
+	
 }
+
 ```
 
 We then updated the file after toying with it to get it to function correctly: 
@@ -582,7 +585,7 @@ To switch back and forth between environments, all we would need to do is update
 
 ### X-Ray: Part Deux
 
-Thanks in part to fellow AWS Cloud Bootcamp member Olga, who was able to figure X-Ray out further, we were able to add additional segments and subsegments to X-Ray. We started this by removing all commments from our X-Ray code. After this with additional research, Andrew was able to find another way to call X-Ray. We updated 'backend-flask/app.py' : 
+Thanks in part to fellow AWS Cloud Bootcamp member Olga, who was able to figure X-Ray out further, we were able to add additional segments and subsegments to X-Ray. We started this by removing all commments from our X-Ray code. After this with additional research, Andrew was able to find another way to call X-Ray. We updated endpoints in 'backend-flask/app.py' : 
 
 ```python
 @app.route("/api/activities/home", methods=['GET'])
