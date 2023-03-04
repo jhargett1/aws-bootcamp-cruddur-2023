@@ -653,7 +653,7 @@ class UserActivities:
 
 ### Run custom queries in Honeycomb and save them later
 
-For this stretch homework task, I happened upon Boards in Honeycomb. This allows us to create many custom queries, then store them for later. Due to the Honeycomb limitation for who can view my boards, I'm only able to share the link here if you would like to view: [Honeycomb Board](https://ui.honeycomb.io/join_team/aws-devops-boot-camp)
+For this stretch homework task, I happened upon Boards in Honeycomb. This allows us to create many custom queries, then store them for later. Due to the Honeycomb limitation for who can view my boards, I'm only able to share the link here to join my team if you would like to view: [Honeycomb Board](https://ui.honeycomb.io/join_team/aws-devops-boot-camp)
 
 Here's a couple of screenshots: both in list view and graph view
 
