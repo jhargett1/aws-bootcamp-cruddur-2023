@@ -27,8 +27,8 @@ services:
       #REACT_APP_BACKEND_URL: "https://${CODESPACE_NAME}-4567.${GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN}"
       REACT_APP_AWS_PROJECT_REGION: "${AWS_DEFAULT_REGION}"
       REACT_APP_AWS_COGNITO_REGION: "${AWS_DEFAULT_REGION}"
-      REACT_APP_AWS_USER_POOLS_ID: "us-east-1_LKP6TYO8T"
-      REACT_APP_CLIENT_ID: "ms2kuf1ln8opvus5njrld6d8c"
+      REACT_APP_AWS_USER_POOLS_ID: "us-east-1_dcXqyAvwF"
+      REACT_APP_CLIENT_ID: "f7veo21bo1if33motndmraqau"
     build: ./frontend-react-js
     ports:
       - "3000:3000"
