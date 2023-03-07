@@ -14,7 +14,7 @@ article.signup-article {
   width: 100%;
   height: 100%;
   justify-content: flex-start;
-  background: #8819f5;
+  background: var(--bg);
 }
 
 article.signup-article .signup-wrapper {
@@ -32,7 +32,7 @@ article.signup-article form {
 article.signup-article label {
   padding: 4px 0px;
   display: block;
-  color: rgba(255,255,255,0.6);
+  color: var(--field-border);
 }
 
 article.signup-article input[type='text'],
@@ -48,7 +48,7 @@ article.signup-article input[type='password'] {
   width: 100%;
   padding: 16px;
   border: solid 1px var(--field-border);
-  background: #1f1f1f;
+  background: var(--fg);
   color: #fff;
 }
 
@@ -107,7 +107,7 @@ article.signup-article button[type='submit'] {
   justify-content: center;
 }
 .already-have-an-account a {
-  color: rgba(149,0,255,1);
+  color: var(--field-border-focus);
   text-decoration: none;
   font-weight: 600;
 }

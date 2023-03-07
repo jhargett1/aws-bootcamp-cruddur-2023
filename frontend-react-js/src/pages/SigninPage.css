@@ -14,7 +14,7 @@ article.signin-article {
   width: 100%;
   height: 100%;
   justify-content: flex-start;
-  background: #8819f5;
+  background: var(--bg);
 }
 
 article.signin-article .signin-wrapper {
@@ -71,7 +71,7 @@ article.signin-article .submit {
 
 article.signin-article  h2 {
   text-align: center;
-  color: #fff;
+  color: #ffffff;
 }
 
 article.signin-article a.forgot-link {
@@ -88,7 +88,7 @@ article.signin-article button[type='submit'] {
   border-radius: 6px;
   padding: 18px 28px;
   font-size: 16px;
-  background: rgba(149,0,255,1);
+  background: var(--field-border-focus);
   color: #fff;
 }
 
@@ -101,7 +101,7 @@ article.signin-article button[type='submit'] {
   justify-content: center;
 }
 .dont-have-an-account a {
-  color: rgba(149,0,255,1);
+  color: var(--field-border-focus);
   text-decoration: none;
   font-weight: 600;
 }
