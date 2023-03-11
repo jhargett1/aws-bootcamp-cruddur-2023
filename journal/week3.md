@@ -43,7 +43,7 @@ import { Auth } from 'aws-amplify';
 
 ![HomeFeedPagejs](https://user-images.githubusercontent.com/119984652/224452597-d688bc53-885a-475a-b39c-1825faff3a2f.png)
 
-Our web app was previously setup prior to implementing authentication by using Cookies to signify signed in and signed out states. We now also needed to edit our code in the 'ProfileInfo.js' file. 
+Our web app was previously setup to implement authentication by using Cookies to signify signed in and signed out states. We now also needed to edit our code in the 'ProfileInfo.js' file. 
 
 ```js
 import { Auth } from 'aws-amplify';
@@ -237,6 +237,34 @@ Client Application Side:
 -	JWT Token best practice – no sensitive info
 -	Encryption in Transit for API calls
 ```
+
+
+### Making our app more user friendly to look at
+
+Andrew gave us an additional video showing us how to edit the content of the styling for our web app, also known as the CSS. CSS is short for cascading style sheets, and is used as a way to format or style the elements in a webpage or web app. 
+
+We learned how to update CSS by using variables to pass values. For example, in 'index.css', create: 
+
+```css
+:root{
+   --variable: value()
+   --variable: value()
+}
+```
+
+Then on the CSS page, you can call the variable:
+
+```css
+.content{
+width: 600px;
+height: 100%;
+background: var(--variable);
+}
+```
+
+We used the Inspect element from our web browser after spinning up our environment to pinpoint elements within each page, then passed values by using variables for colors that match in our CSS stylings. This allowed us to provide a more uniform design across all pages. 
+
+### Stretch Homework
 
 That wrapped up all of the normal homework for Week 3 of the AWS Bootcamp. I then attempted to the stretch homework 'Implement a IdP login eg. Login with Amazon or Facebook or Apple.' 
 
