@@ -5,6 +5,10 @@ In this task, Andrew showed us how to create a Cognito User Pool through the AWS
 
 ![CruddurCognitoUserPool](https://user-images.githubusercontent.com/119984652/224451812-20566dda-8dec-406e-aa50-a277e17f8ac7.png)
 
+We then needed to setup an app client through the same context menu. For the purposes of our app, we set it up as a public client, no client secret, left the default authentication flows, and left the default attributes selected. The only attributes we need are email, name, and preferred_username.
+
+![AppClient](https://user-images.githubusercontent.com/119984652/224490568-316ec216-5636-4f2a-83b0-48c4d0eab80a.png)
+
 With our user pool setup, we needed to pass the variables we set here into our docker-compose.yml file:
 
 ```yml
