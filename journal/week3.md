@@ -266,7 +266,7 @@ We used the Inspect element from our web browser after spinning up our environme
 
 ### Stretch Homework
 
-That wrapped up all of the normal homework for Week 3 of the AWS Bootcamp. I then attempted to the stretch homework 'Implement a IdP login eg. Login with Amazon or Facebook or Apple.' 
+That wrapped up all of the normal homework for Week 3 of the AWS Bootcamp. I then attempted the stretch homework 'Implement a IdP login eg. Login with Amazon or Facebook or Apple.' 
 
 To do this, I created a separate branch in my repo just to test whatever code implement changes I made. Most documentation I found kept referencing using AWS Amplify Authenticator, as it allows the use of federated social providers to add users to the user pool of Cognito. The only downside to this is it would render our custom sign-in page pointless. Authenticator invokes its own UI for sign-in's. 
 
