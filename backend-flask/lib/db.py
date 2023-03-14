@@ -19,14 +19,14 @@ class Db:
     self.pool = ConnectionPool(connection_url)
   # when we want to commit data such as an insert
   # be sure to check for RETURNING in all uppercases
-  def print_sql(self,title,sql)
-    print(f'SQL Statement [{title}]-------')
+  def print_sql(self,title,sql):
     cyan = '\033[96m'
-    no_color = '\033[0m'  
+    no_color = '\033[0m'
+    print("\n")
+    print(f'{cyan}SQL Statement [{title}]-------{no_color}')
+    print(sql + "\n")
   def query_commit(self,sql,params):
     self.print_sql('commit with returning',sql)
-    print(sql + "\n")
-
     pattern = r"\bRETURNING\b"
     is_returning_id = re.search(pattern, sql)
     try:
