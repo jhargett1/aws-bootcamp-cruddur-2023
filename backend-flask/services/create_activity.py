@@ -1,4 +1,3 @@
-import uuid
 from datetime import datetime, timedelta, timezone
 
 from lib.db import db
@@ -44,22 +43,22 @@ class CreateActivity:
       }   
     else:
       expires_at  = (now + ttl_offset)
-      CreateActivity.create_activity(user_handle,message,expires_at)
-      model['data'] = {
-        'uuid': uuid.uuid4(),
-        'display_name': 'Andrew Brown',
-        'handle':  user_handle,
-        'message': message,
-        'created_at': now.isoformat(),
-        'expires_at': (now + ttl_offset).isoformat() 
-      }
+      uuid = CreateActivity.create_activity(user_handle,message,expires_at)
+
+      object_json = CreateActivity.query_object_activity(uuid)
+      model['data'] = object_json
     return model
 
   def create_activity(handle, message, expires_at):
-    sql = db.template('create_activity')
+    sql = db.template('activities','create')
     uuid = db.query_commit(sql,{
       'handle': handle,
       'message': message,
       'expires_at': expires_at
-    })     
-  #def query_object_activity():
+    })  
+    return uuid   
+  def query_object_activity(uuid):
+    sql = db.template('activities','object')
+    return db.query_object_json(sql,{
+      'uuid': uuid
+    }) 
