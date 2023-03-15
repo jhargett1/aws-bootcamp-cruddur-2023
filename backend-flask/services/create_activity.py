@@ -42,7 +42,7 @@ class CreateActivity:
         'message': message
       }   
     else:
-      expires_at  = (now + ttl_offset)
+      expires_at = (now + ttl_offset)
       uuid = CreateActivity.create_activity(user_handle,message,expires_at)
 
       object_json = CreateActivity.query_object_activity(uuid)
