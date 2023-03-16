@@ -27,7 +27,7 @@ class Db:
     connection_url = os.getenv("CONNECTION_URL")
     self.pool = ConnectionPool(connection_url)
   # we want to commit data such as an insert
-  # be sure to check for RETURNING in all uppercases
+    # be sure to check for RETURNING in all uppercases
   def print_params(self,params):
     blue = '\033[94m'
     no_color = '\033[0m'
