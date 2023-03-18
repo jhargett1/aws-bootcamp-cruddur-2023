@@ -551,3 +551,52 @@ Under their suggestion, I added an email for both mock data users, then ran db-s
 After that, I ran db-setup from both local (just ./bin/db-setup) and prod(./bin/db-setup prod) to create my database, create the extension, create the tables, seed the data, etc.  since I was getting no data when I'd psql to the database and check the tables (SELECT * FROM users;). When this came back with "INSERT" I was pretty sure I was on the right track.
 
 I next logged into Cruddur, and posted a Crud which posted!!!! I refreshed the page, and just as Andrew's did in the video, it joined the databases, and posted the "This was imported as seed data!" Now the only issue was Cruds post as Andrew, and not as myself. I found several other Bootcampers fixed this by changing the hardcoded value for 'user_handle' from 'andrewbrown' to their own preferred username, and it fixed it. I also found another thread on Discord from anle4s#7774 where they passed the user_handle prop in the ActivityForm component, updated the fetch request body of the ActivityForm.js, and reassigned the user_handle variable in app.py as well. These changes will ensure that the user_handle prop is passed correctly and included in the fetch request, and that the server can retrieve it from the request payload. 
+
+
+## Watched Ashish's Week 4 - Security Considerations
+
+I kept detailed notes of Ashish's video as well: 
+
+```
+Week 4 AWS Bootcamp Notes
+
+Business Use Case - Create Amazon RDS PostGres for Developers to use for their Web Application in AWS
+Relational Database – SQL, SQL Server, PostGres – has tables and rows with connection
+Non-relation database- NoSQL – decoupled, no strong relationship between columns and rows
+DB engines in Amazon RDS: 
+-	Aurora (MySQL Compatible)
+-	Aurora (PostgreSQL compatible)
+-	MySQL
+-	MariaDB
+-	PostgreSQL
+-	Oracle
+-	Microsoft SQL Server
+- User sensitive information is stored in database
+- Be sure you’re in the correct region in AWS for where your database needs to be created
+- use a secure master password for your database
+Amazon RDS endpoint breakdown: 
+cruddur-db-instance.c5s0ofgnyjez.us-east-1.rds.amazonaws.com
+	\/		\/		    \/	
+RDS instance name |random generated |AWS region
+-	DB shouldn’t be publicly accessible
+-	Can use a different port than the default Postgres port (5432)
+-	Deletion protection should be turned on
+Postgres.app – Postgres resource
+AWS RDS Postgres Security Best Practices: 
+Amazon side –
+-	Use VPCs: Use Amazon Virtual Private Cloud (VPC) to create a private network for your RDS instance. This helps prevent unauthorized access to your instance from the public internet.
+-	Compliance standard is what your business requires
+-	RDS Instances should only be in the AWS region that you are legally allowed to be holding user data in.
+-	Amazon Organizations SCP – to manage RDS deletion, RDS creation, region lock, RDS Encryption enforced, etc.
+-	AWS CloudTrail is enabled and monitored to trigger alerts on malicious RDS behavior by an identity in AWS.
+-	Amazon Guard Duty is enabled in the account and region of RDS
+Amazon RDS – For Application – 
+-	RDS Instance to use appropriate Authentication: use IAM authentication, Kerberos, etc. (not the default)
+-	Database User Lifecycle Management – Create, Modify, Delete users
+-	AWS User Access Lifecycle Management – Change of Roles/Revoke Roles, etc.
+-	Security Group to be restricted only to known Ips
+-	Not have RDS be internet accessible
+-	Encryption in Transit for comms between App and RDS
+-	Secret Management: Master User passwords can be used with AWS Secrets Manager to automatically rotate the secrets for Amazon RDS
+
+```
