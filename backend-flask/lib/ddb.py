@@ -10,7 +10,7 @@ class Ddb:
     if endpoint_url:
       attrs = { 'endpoint_url': endpoint_url }
     else:
-      attrs = {}
+      attrs = {}  
     dynamodb = boto3.client('dynamodb',**attrs)
     return dynamodb
   def list_message_groups(client,my_user_uuid):
