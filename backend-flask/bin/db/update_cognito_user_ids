@@ -6,12 +6,12 @@ import sys
 
 print("-- db-update-cognito-user-ids")
 
-current_path = os.path.dirname(os.path.abspath(__file__))                      # appending the current path
-parent_path = os.path.abspath(os.path.join(current_path, '..', '..'))          # appending the current path
-sys.path.append(parent_path)                                                   # appending the current path
-from lib.db import db                                                          # loading the Postgres database
+current_path = os.path.dirname(os.path.abspath(__file__))
+parent_path = os.path.abspath(os.path.join(current_path, '..', '..'))
+sys.path.append(parent_path)
+from lib.db import db
 
-def update_users_with_cognito_user_id(handle,sub):                             # updates user cognito user id within database passing in handle and sub
+def update_users_with_cognito_user_id(handle,sub):                            
   sql = """
     UPDATE public.users
     SET cognito_user_id = %(sub)s
