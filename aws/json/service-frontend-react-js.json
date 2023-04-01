@@ -3,14 +3,7 @@
     "launchType": "FARGATE",
     "desiredCount": 1,
     "enableECSManagedTags": true,
-    "enableExecuteCommand": true,
-    "loadBalancers": [
-        {
-            "targetGroupArn": "arn:aws:elasticloadbalancing:us-east-1:554621479919:targetgroup/cruddur-frontend-react-js/5b23040f743a229a",
-            "containerName": "frontend-react-js",
-            "containerPort": 3000
-        }
-    ],    
+    "enableExecuteCommand": true,   
     "networkConfiguration": {
       "awsvpcConfiguration": {
         "assignPublicIp": "ENABLED",
