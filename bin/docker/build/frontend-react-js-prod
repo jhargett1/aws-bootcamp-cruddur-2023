@@ -1,4 +1,11 @@
-#! usr/bin/bash 
+#! /usr/bin/bash 
+
+ABS_PATH=$(readlink -f "$0")
+BUILD_PATH=$(dirname $ABS_PATH)
+DOCKER_PATH=$(dirname $BUILD_PATH)
+BIN_PATH=$(dirname $DOCKER_PATH)
+PROJECT_PATH=$(dirname $BIN_PATH)
+FRONTEND_REACT_JS_PATH="$PROJECT_PATH/frontend-react-js"
 
 docker build \
 --build-arg REACT_APP_BACKEND_URL="https://api.thejoshdev.com" \
@@ -7,5 +14,5 @@ docker build \
 --build-arg REACT_APP_AWS_USER_POOLS_ID="us-east-1_N7WWGl3KC" \
 --build-arg REACT_APP_CLIENT_ID="575n8ecqc551iscnosab6e0un3" \
 -t frontend-react-js \
--f Dockerfile.prod \
-.
+-f "$FRONTEND_REACT_JS_PATH/Dockerfile.prod" \
+"$FRONTEND_REACT_JS_PATH/."

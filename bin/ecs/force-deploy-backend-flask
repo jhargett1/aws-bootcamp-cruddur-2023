@@ -1,4 +1,4 @@
-#! /user/bin/bash
+#! /usr/bin/bash
 
 CLUSTER_NAME="cruddur"
 SERVICE_NAME="backend-flask"
