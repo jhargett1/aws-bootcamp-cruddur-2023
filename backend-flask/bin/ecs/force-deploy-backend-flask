@@ -1,0 +1,22 @@
+#! /user/bin/bash
+
+CLUSTER_NAME="cruddur"
+SERVICE_NAME="backend-flask"
+TASK_DEFINITION_FAMILY="backend-flask"
+
+LATEST_TASK_DEFINITION_ARN=$(aws ecs describe-task-definition \
+--task-definition $TASK_DEFINITION_FAMILY \
+--query 'taskDefinition.taskDefinitionArn' \
+--output text)
+
+aws ecs update-service \
+--cluster $CLUSTER_NAME \
+--service $SERVICE_NAME \
+--task-definition $LATEST_TASK_DEFINITION_ARN \
+--force-new-deployment
+
+#aws ecs describe-services \
+#--cluster $CLUSTER_NAME \
+#--service $SERVICE_NAME \
+#--query 'services[0].deployments' \
+#--output table
