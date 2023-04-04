@@ -1,6 +1,6 @@
 #! /usr/bin/bash
 if [ -z "$1" ]; then
-    echo "no TASK_ID argument supplied eg ./bin/ecs/connect-to-backend-flask 89a18169c70f41bd873e0395255291fa"
+    echo "no TASK_ID argument supplied eg ./bin/backend/connect-to-backend-flask 89a18169c70f41bd873e0395255291fa"
     exit 1
 fi
 TASK_ID=$1
