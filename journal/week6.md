@@ -89,3 +89,61 @@ Again, back in the AWS console, only now in ECS, we now view Clusters.
 
 Andrew explains we're going to use AWS ECR to house our containers. To do this, we must first create a repository.
 
+```sh
+aws ecr create-repository \
+  --repository-name cruddur-python \
+  --image-tag-mutability MUTABLE
+```
+
+This gives us a repository named 'cruddur-python' with the image tag being mutable. This will prevent tags from being overwritten. Next, we must login to ECR using our AWS credentials. The command here uses our env variables we've already set in our environment.
+
+```sh
+aws ecr get-login-password --region $AWS_DEFAULT_REGION | docker login --username AWS --password-stdin "$AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com"
+```
+
+We can now push containers. We set our path to the repo.
+
+```sh
+export ECR_PYTHON_URL="$AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/cruddur-python"
+```
+
+We pull a version of Python for the container.
+
+```sh
+docker pull python:3.10-slim-buster
+```
+
+We then tag the image.
+
+```sh
+docker tag python:3.10-slim-buster $ECR_PYTHON_URL:3.10-slim-buster
+```
+
+Next, we push the image.
+
+```sh
+docker push $ECR_PYTHON_URL:3.10-slim-buster
+```
+
+From ECR in the AWS console, we can now see our image in the repository.
+
+![image](https://user-images.githubusercontent.com/119984652/230942977-689c623c-9da3-4a99-9f01-bcc06c050311.png)
+
+Now we must update our Flask app to use this. We navigate to our 'backend-flask' location, then edit our Dockerfile.
+
+```Docker
+FROM 554621479919.dkr.ecr.us-east-1.amazonaws.com/cruddur-python:3.10-slim-buster
+
+#  Inside Container
+# Make a new folder inside container
+WORKDIR /backend-flask
+
+# Outside Container -> Inside Container
+# this contains the libraries we want to install to run the app
+COPY requirements.txt requirements.txt
+
+# Inside Container
+# Install the python libraries used for the app
+RUN pip3 install -r requirements.txt
+```
+
