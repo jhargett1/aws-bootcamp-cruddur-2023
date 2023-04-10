@@ -131,7 +131,7 @@ From ECR in the AWS console, we can now see our image in the repository.
 
 Now we must update our Flask app to use this. We navigate to our 'backend-flask' location, then edit our Dockerfile.
 
-```Docker
+```Dockerfile
 FROM 554621479919.dkr.ecr.us-east-1.amazonaws.com/cruddur-python:3.10-slim-buster
 
 #  Inside Container
