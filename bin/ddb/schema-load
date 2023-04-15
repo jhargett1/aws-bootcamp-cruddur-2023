@@ -15,55 +15,59 @@ ddb = boto3.client('dynamodb',**attrs)
 
 table_name = 'cruddur-messages'
 
+existing_tables = ddb.list_tables()['TableNames']
 
-response = ddb.create_table(
-  TableName=table_name,
-  AttributeDefinitions=[
-    {
-      'AttributeName': 'message_group_uuid',
-      'AttributeType': 'S'
-    },    
-    {
-      'AttributeName': 'pk',
-      'AttributeType': 'S'
-    },
-    {
-      'AttributeName': 'sk',
-      'AttributeType': 'S'
-    },
-  ],
-  KeySchema=[
-    {
-      'AttributeName': 'pk',
-      'KeyType': 'HASH'
-    },
-    {
-      'AttributeName': 'sk',
-      'KeyType': 'RANGE'
-    },
-  ],
-  GlobalSecondaryIndexes=[{
-    'IndexName':'message-group-sk-index',
-    'KeySchema':[{
-      'AttributeName': 'message_group_uuid',
-      'KeyType': 'HASH'
-    },{
-      'AttributeName': 'sk',
-      'KeyType': 'RANGE'
+if table_name in existing_tables:
+  print(f"Table {table_name} already exists")
+else:
+  response = ddb.create_table(
+    TableName=table_name,
+    AttributeDefinitions=[
+      {
+        'AttributeName': 'message_group_uuid',
+        'AttributeType': 'S'
+      },    
+      {
+        'AttributeName': 'pk',
+        'AttributeType': 'S'
+      },
+      {
+        'AttributeName': 'sk',
+        'AttributeType': 'S'
+      },
+    ],
+    KeySchema=[
+      {
+        'AttributeName': 'pk',
+        'KeyType': 'HASH'
+      },
+      {
+        'AttributeName': 'sk',
+        'KeyType': 'RANGE'
+      },
+    ],
+    GlobalSecondaryIndexes=[{
+      'IndexName':'message-group-sk-index',
+      'KeySchema':[{
+        'AttributeName': 'message_group_uuid',
+        'KeyType': 'HASH'
+      },{
+        'AttributeName': 'sk',
+        'KeyType': 'RANGE'
+      }],
+      'Projection': {
+        'ProjectionType': 'ALL'
+      },
+      'ProvisionedThroughput': {
+        'ReadCapacityUnits': 5,
+        'WriteCapacityUnits': 5
+      },
     }],
-    'Projection': {
-      'ProjectionType': 'ALL'
-    },
-    'ProvisionedThroughput': {
-      'ReadCapacityUnits': 5,
-      'WriteCapacityUnits': 5
-    },
-  }],
-  BillingMode='PROVISIONED',
-  ProvisionedThroughput={
-      'ReadCapacityUnits': 5,
-      'WriteCapacityUnits': 5
-  }
-)
+    BillingMode='PROVISIONED',
+    ProvisionedThroughput={
+        'ReadCapacityUnits': 5,
+        'WriteCapacityUnits': 5
+    }
+  )
 
-print(response)
+  print(response)
