@@ -13,3 +13,8 @@ def handler(event:, context:)
   body = {url: url}.to_json
   { statusCode: 200, body: body }
 end
+
+puts handler(
+  event: {},
+  context: {}
+)
