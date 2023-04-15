@@ -37,7 +37,10 @@ tasks:
   - name: react-js
     command: |
       cd frontend-react-js
-      npm i      
+      npm i   
+  - name: sharp
+    command: |
+      source  "$THEIA_WORKSPACE_ROOT/bin/avatar/sharp"         
 vscode:
   extensions:
     - 42Crunch.vscode-openapi
