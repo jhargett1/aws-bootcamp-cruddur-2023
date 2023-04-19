@@ -1,6 +1,6 @@
 # Week 6 and 7  — Deploying Containers
 
-We started these 2 weeks with the revelation that we're not going to be able to use ECS EC2, and instead will use Fargate. Andrew explained initially we were going to use ECS EC2 to stay away from spend for the bootcamp, but to stay within the free tier of EC2, it would require too much complexity and the spend incurred with Fargate is minimal. 
+We started these 2 weeks with the revelation that we're not going to be able to use ECS EC2, and instead will use Fargate. Andrew explained initially we were going to use ECS to stay away from spend for the bootcamp, but to stay within the free tier of EC2, it would require too much complexity and the spend incurred with Fargate is minimal. 
 
 We began by making sure we can test our connection to the RDS. We created a new script file in '/backend-flask/db/' named test. 
 
@@ -146,4 +146,89 @@ COPY requirements.txt requirements.txt
 # Install the python libraries used for the app
 RUN pip3 install -r requirements.txt
 ```
+
+To test the new configuration in our Dockerfile, we run select services from the cli. 
+
+```sh
+docker compose up backend-flask db
+```
+
+After this completes, we can see that the backend is running, as the port is now open. We test the health-check.
+
+![image](https://user-images.githubusercontent.com/119984652/233216524-da7a2eac-d209-481a-ba80-cb17cba8dc08.png)
+
+We can now start pushing this. So we again make another repo.
+
+```sh
+```sh
+aws ecr create-repository \
+  --repository-name backend-flask \
+  --image-tag-mutability MUTABLE
+```
+
+Next we set the URL:
+
+```sh
+export ECR_BACKEND_FLASK_URL="$AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/backend-flask"
+echo $ECR_BACKEND_FLASK_URL
+```
+
+Now we build the image. On our previous container, we didn't need to build an image, we pulled it. Andrew confirms we must make sure we're in the backend-flask directory prior to running the command.
+
+```sh
+docker build -t backend-flask .
+```
+
+We then tag and push the image.
+
+```sh
+docker tag backend-flask:latest $ECR_BACKEND_FLASK_URL:latest
+```
+
+We make sure to tag the push with the tag ':latest' although this isn't necessary. It will get tagged this way by default. Also when using AWS, Andrew explained it will always look for the ':latest' tag. 
+
+```sh
+docker push $ECR_BACKEND_FLASK_URL:latest
+```
+
+Before working on the frontend, Andrew explained he'd like us to get the backend going first, just to give us a basis of good debugging and understanding how these containers actually work.
+
+From here, we go back to ECS in the AWS console. Andrew walks us through the UI of the existing options and configuration of setting up a service. While explaining task definitions, we find that the Cloudwatch log group we created earlier is improperly named. We neavigate back to Cloudwatch, and from the UI, we manually create a new log group named cruddur, with a retention period of 1 day. 
+
+![image](https://user-images.githubusercontent.com/119984652/233219523-79937a4e-6c3d-4838-a1a3-d6d4f499613a.png)
+
+Back in our code, we now need to finish creating our roles and setup the policy for our task definitions.
+
+Our service-execution-policy.json:
+
+```json
+{
+    "Version":"2012-10-17",
+    "Statement":[{
+        "Effect": "Allow",
+        "Action": [
+          "ssm:GetParameters",
+          "ssm:GetParameter"
+        ],
+        "Resource": "arn:aws:ssm:us-east-1:554621479919:parameter/cruddur/backend-flask/*"        
+    }]
+}
+```
+
+We run the file from the CLI
+
+```sh
+aws iam create-role \
+--role-name CruddurServiceExecutionRole \
+--assume-role-policy-document file://aws/policies/service-execution-policy.json
+```
+
+From the terminal, we can see it completed.
+
+![image](https://user-images.githubusercontent.com/119984652/233222293-5fbdd65a-495e-4827-a052-c306f9d5cd68.png)
+
+We also double-check from IAM in the AWS console to make sure the role is created.
+
+![image](https://user-images.githubusercontent.com/119984652/233222461-61e96c00-dbb0-4249-8035-915239a10b2c.png)
+
 
