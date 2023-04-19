@@ -28,7 +28,8 @@ env:
     AWS_ACCOUNT_ID: 554621479919
     CONTAINER_NAME: backend-flask
     IMAGE_URL: 554621479919.dkr.ecr.us-east-1.amazonaws.com
-    REPO_NAME: backend-flask:latest   
+    REPO_NAME: backend-flask:latest
+    AWS_COGNITO_USER_POOL_CLIENT_ID: 575n8ecqc551iscnosab6e0un3   
 artifacts:
   files:
     - imagedefinitions.json
