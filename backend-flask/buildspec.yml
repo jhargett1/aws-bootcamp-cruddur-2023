@@ -29,8 +29,6 @@ env:
     CONTAINER_NAME: backend-flask
     IMAGE_URL: 554621479919.dkr.ecr.us-east-1.amazonaws.com
     REPO_NAME: backend-flask:latest
-    AWS_COGNITO_USER_POOL_CLIENT_ID: 575n8ecqc551iscnosab6e0un3   
-    OTEL_SERVICE_NAME: backend-flask
 artifacts:
   files:
     - imagedefinitions.json
