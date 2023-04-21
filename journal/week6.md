@@ -333,9 +333,9 @@ We can now begin working on our task definitions. From our workspace, we create 
         {"name": "OTEL_EXPORTER_OTLP_ENDPOINT", "value": "https://api.honeycomb.io"},
         {"name": "AWS_COGNITO_USER_POOL_ID", "value": ""},
         {"name": "AWS_COGNITO_USER_POOL_CLIENT_ID", "value": ""},
-        {"name": "FRONTEND_URL", "value": ""},
-        {"name": "BACKEND_URL", "value": ""},
-        {"name": "AWS_DEFAULT_REGION", "value": ""}
+        {"name": "FRONTEND_URL", "value": "*"},
+        {"name": "BACKEND_URL", "value": "*"},
+        {"name": "AWS_DEFAULT_REGION", "value": "us-east-1"}
       ],
       "secrets": [
         {"name": "AWS_ACCESS_KEY_ID"    , "valueFrom": "arn:aws:ssm:AWS_REGION:AWS_ACCOUNT_ID:parameter/cruddur/backend-flask/AWS_ACCESS_KEY_ID"},
@@ -774,5 +774,172 @@ We now decide to create our frontend-react-js service. To do so, from our 'aws/j
       ]
     }
   }
+```
+
+We can now create the service from the CLI:
+
+```sh
+aws ecs create-service --cli-input-json file://aws/json/service-frontend-react-js.json
+```
+
+Back in ECS, the service deploys a task, but the task shows unhealthy in the logs. We stop the task from the AWS console, then go back our workspace. We edit the code for our frontend-react-js.json file, removing the load balancer so we can get into the task to troubleshoot.
+
+Code removed:
+
+```json
+    "loadBalancers": [
+      {
+          "targetGroupArn": "arn:aws:elasticloadbalancing:us-east-1:99999999999:targetgroup/cruddur-frontend-react-js/9999999999999",
+          "containerName": "frontend-react-js",
+          "containerPort": 3000
+      }
+```
+
+We create the service from the CLI again, running the cmd from above. we next run one of our bash scripts to connect to the service.
+
+```sh
+./bin/ecs/connect-to-service _9999999999_ frontend-react-js
+```
+
+This fails.
+
+![image](https://user-images.githubusercontent.com/119984652/233735020-2e4ccb4d-c08c-47c2-afa1-a100fe1aeadf.png)
+
+We decide to rebuild the production environment locally to troubleshoot.
+
+```sh
+docker build \
+--build-arg REACT_APP_BACKEND_URL="https://4567-$GITPOD_WORKSPACE_ID.$GITPOD_WORKSPACE_CLUSTER_HOST" \
+--build-arg REACT_APP_AWS_PROJECT_REGION="$AWS_DEFAULT_REGION" \
+--build-arg REACT_APP_AWS_COGNITO_REGION="$AWS_DEFAULT_REGION" \
+--build-arg REACT_APP_AWS_USER_POOLS_ID="us-east-1_99999999999" \
+--build-arg REACT_APP_CLIENT_ID="9999999999999" \
+-t frontend-react-js \
+-f Dockerfile.prod \
+.
+--
+```
+
+Then we run it:
+
+```sh
+docker run --rm -p 3000:3000 -it frontend-react-js
+```
+
+We find that since the container is running in Alpine, it does not have the ability to allow us to shell into it, as it's not installed by default for the container. Instead we duplicate our connect-to-service script we created earlier, and specify each file, one for connect-to-backend-flask and the other connect-to-frontend-react.
+
+```sh
+#! /usr/bin/bash
+if [ -z "$1" ]; then
+    echo "no TASK_ID argument supplied eg ./bin/ecs/connect-to-frontend-react-js 89a18169c70f41bd873e0395255291fa"
+    exit 1
+fi
+TASK_ID=$1
+
+CONTAINER_NAME=frontend-react-js
+
+aws ecs execute-command \
+--region $AWS_DEFAULT_REGION \
+--cluster cruddur \
+--task $TASK_ID \
+--container $CONTAINER_NAME \
+--command "/bin/sh" \
+--interactive
+```
+
+```sh
+#! /usr/bin/bash
+if [ -z "$1" ]; then
+    echo "no TASK_ID argument supplied eg ./bin/backend/connect-to-backend-flask 89a18169c70f41bd873e0395255291fa"
+    exit 1
+fi
+TASK_ID=$1
+
+CONTAINER_NAME=backend-flask
+
+aws ecs execute-command \
+--region $AWS_DEFAULT_REGION \
+--cluster cruddur \
+--task $TASK_ID \
+--container $CONTAINER_NAME \
+--command "/bin/bash" \
+--interactive
+```
+
+After chmod'ing both files, we run 'connect-to-frontend-react-js'
+
+```sh
+./bin/ecs/connect-to-frontend-react-js <taskid>
+```
+
+This connection is successful. We find that we have curl, so Andrew asks ChatGPT to write a curl for a health check on a task definition running in Fargate. In the generated code, we find the health check, and add it to our 'frontend-react-js.json' file. 
+
+```json
+"healthCheck": {
+  "command": [
+    "CMD-SHELL",
+    "curl -f http://localhost:3000 || exit 1"
+    ],
+    "interval": 30,
+    "timeout": 5,
+    "retries": 3
+    }
+}
+```
+
+After this, we re-register our task definition for 'frontend-react-js.json'
+
+```sh
+aws ecs register-task=definition --cli-input-json file://aws/task-definitions/frontend-react-js.json
+```
+
+We go into EC2 in the AWS Console and check the target group for the frontend. In reviewing the health check, we find we may need to override the port to port 3000, so we do so. 
+
+Back in our workspace, we go back into our 'service-frontend-react-js.json' file and add our Load Balancer code back in to test and see if the port override on the target group was the issue. 
+
+```json
+    "loadBalancers": [
+      {
+          "targetGroupArn": "arn:aws:elasticloadbalancing:us-east-1:99999999999:targetgroup/cruddur-frontend-react-js/9999999999999",
+          "containerName": "frontend-react-js",
+          "containerPort": 3000
+      }
+```
+
+We then create the service again, after removing the service from ECS:
+
+```sh
+aws ecs create-service --cli-input-json file://aws/json/service-frontend-react-js.json
+```
+
+In reviewing the target from target groups in EC2, the target shows a status of unhealthy because the request timed out. We review our service security group we setup previously and find that we hadn't setup port information for the frontend yet. We edit the inbound rules, allowing port 3000. We go back into our target groups and remove the port override, then check the status of our service. It now shows a healthy task! 
+
+Moving forward, we now decide to setup our custom domain. We open Route53 in AWS, then go to Hosted Zones. We create a new hosted zone using our custom domain we purchased prior to the bootcamp. I added thejoshdev.com. Next, we needed an SSL certificate, so we went to AWS Certificate Manager > Request a certificate > Request a public certificate. I entered my FQDN, then added a wildcard, and asked for DNS validation.
+
+My certificate was pending validation, even when Andrew's completed. I still needed to update my DNS settings on my domain registrar to use the AWS nameservers setup in Route53. I updated this, then waited over the weekend for the change to propagate. When I returned to Certificate Manager, my domains showed a success status.
+
+![image](https://user-images.githubusercontent.com/119984652/233741490-1c93e322-45dd-4da1-a914-a7a326b1235d.png)
+
+Back in Route53, we now have a CNAME record added. We move over to EC2, then select our load balancer. From there, we edit the listeners. We set the frontend listener on port 80 to forward to port 443 for https. Next, we set another rule, forwarding port 443 to our cruddur-frontend-react-js target group.
+
+![image](https://user-images.githubusercontent.com/119984652/233742524-caea5cc2-7361-4ca3-99ec-5f2321257678.png)
+
+We then remove our previously setup listeners on port 3000 and 4567. 
+
+![image](https://user-images.githubusercontent.com/119984652/233742625-9cab7914-0287-4e8b-97e5-22a84ab72444.png)
+
+We go back into our listener for port 443, editing the rule. Host header is api.thejoshdev.com, then forward to cruddur-backend-flask target group. Back in Route53, we go back to Hosted Zones and create a new record. Its an A record, routing traffic to "Alias to Application and Classic Load Balancer" in us-east-1 using our ALB load balancer. The routing policy is set to simple, then we save it. Next we create another A record, all of the same settings as before, but this time we create a subdomain of 'api' to thejoshdev.com. Since we hae this, it's decided we do not need the added routing of /api/ when reaching our health-check, so we go back into our workspace. We open our app.py file, and update our @app.routes to remove the /api/ from the path. 
+
+From this:
+![image](https://user-images.githubusercontent.com/119984652/233745591-4bd713fc-d215-49e7-9bcd-e8422dc74720.png)
+
+To this:
+![image](https://user-images.githubusercontent.com/119984652/233745624-5582830f-1e4a-4a2f-99e3-ee61fdd2d690.png)
+
+We started to clean up the remaining @app.routes, but Andrew recalled we will need these from the frontend, so we instead go back and revert these changes. Instead we go into our task-definitions folder, then select our backend-flask.json file and edit the ennironment variables for "FRONTEND_URL" and "BACKEND_URL".
+
+```json
+          {"name": "FRONTEND_URL", "value": "https://thejoshdev.com"},
+          {"name": "BACKEND_URL", "value": "https://api.thejoshdev.com"},
 ```
 
