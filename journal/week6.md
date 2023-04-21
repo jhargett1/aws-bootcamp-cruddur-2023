@@ -160,7 +160,6 @@ After this completes, we can see that the backend is running, as the port is now
 We can now start pushing this. So we again make another repo.
 
 ```sh
-```sh
 aws ecr create-repository \
   --repository-name backend-flask \
   --image-tag-mutability MUTABLE
