@@ -817,7 +817,6 @@ docker build \
 -t frontend-react-js \
 -f Dockerfile.prod \
 .
---
 ```
 
 Then we run it:
@@ -928,7 +927,7 @@ We then remove our previously setup listeners on port 3000 and 4567.
 
 ![image](https://user-images.githubusercontent.com/119984652/233742625-9cab7914-0287-4e8b-97e5-22a84ab72444.png)
 
-We go back into our listener for port 443, editing the rule. Host header is api.thejoshdev.com, then forward to cruddur-backend-flask target group. Back in Route53, we go back to Hosted Zones and create a new record. Its an A record, routing traffic to "Alias to Application and Classic Load Balancer" in us-east-1 using our ALB load balancer. The routing policy is set to simple, then we save it. Next we create another A record, all of the same settings as before, but this time we create a subdomain of 'api' to thejoshdev.com. Since we hae this, it's decided we do not need the added routing of /api/ when reaching our health-check, so we go back into our workspace. We open our app.py file, and update our @app.routes to remove the /api/ from the path. 
+We go back into our listener for port 443, editing the rule. Host header is api.thejoshdev.com, then forward to cruddur-backend-flask target group. Back in Route53, we go back to Hosted Zones and create a new record. Its an A record, routing traffic to "Alias to Application and Classic Load Balancer" in us-east-1 using our ALB load balancer. The routing policy is set to simple, then we save it. Next we create another A record, all of the same settings as before, but this time we create a subdomain of `api` to thejoshdev.com. Since we hae this, it's decided we do not need the added routing of /api/ when reaching our health-check, so we go back into our workspace. We open our app.py file, and update our @app.routes to remove the /api/ from the path. 
 
 From this:
 ![image](https://user-images.githubusercontent.com/119984652/233745591-4bd713fc-d215-49e7-9bcd-e8422dc74720.png)
@@ -939,7 +938,257 @@ To this:
 We started to clean up the remaining @app.routes, but Andrew recalled we will need these from the frontend, so we instead go back and revert these changes. Instead we go into our task-definitions folder, then select our backend-flask.json file and edit the ennironment variables for "FRONTEND_URL" and "BACKEND_URL".
 
 ```json
+          {"name": "FRONTEND_URL", "value": "thejoshdev.com"},
+          {"name": "BACKEND_URL", "value": "api.thejoshdev.com"},
+```
+
+With this change, we now have to go and update our task definition from the CLI to make the change in ECS:
+
+```sh
+aws ecs register-task-definition --cli-input-json file://aws/task-definitions/backend-flask.json
+```
+
+We now have to push the image for the frontend-react again. We make sure we're still logged into ECR first:
+
+```sh
+aws ecr get-login-password --region $AWS_DEFAULT_REGION | docker login --username AWS --password-stdin "$AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com"
+```
+
+We edit our build a bit, changing the variable for REACT_APP_BACKEND_URL to reflect our new subdomain, then build it.
+
+We first set the URL.
+
+```sh
+export ECR_FRONTEND_REACT_URL="$AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/frontend-react-js"
+echo $ECR_FRONTEND_REACT_URL
+```
+
+Then build.
+
+```sh
+docker build \
+--build-arg REACT_APP_BACKEND_URL="https://api.cruddur.com" \
+--build-arg REACT_APP_AWS_PROJECT_REGION="$AWS_DEFAULT_REGION" \
+--build-arg REACT_APP_AWS_COGNITO_REGION="$AWS_DEFAULT_REGION" \
+--build-arg REACT_APP_AWS_USER_POOLS_ID="us-east-1_99999999999" \
+--build-arg REACT_APP_CLIENT_ID="9999999999999" \
+-t frontend-react-js \
+-f Dockerfile.prod \
+.
+```
+
+We tag and push the image.
+
+```sh
+docker tag frontend-react-js:latest $ECR_FRONTEND_REACT_URL:latest
+
+docker push $ECR_FRONTEND_REACT_URL:latest
+```
+
+With the task definitions for the backend updated, we go back to ECS and update the service, forcing a new deployment, using the latest revision. The frontend uses the latest revision by default, so all we need to do is update the service, forcing a new deployment. Both tasks show as healthy after deployment, so we go check our target groups in ec2 > Target Groups > both the frontend and backend are now showing as healthy. 
+
+![image](https://user-images.githubusercontent.com/119984652/233783090-a4199ff6-a1c8-43e9-992d-5b6b7f845ebc.png)
+
+When we load the app through the browser, it displays. However there's no data returned, also if we inspect it, there's a CORS error for the subdomain, api.thejoshdev.com. Andrew is getting the same for api.cruddur.com. We go back into ECS and grab the task id for the backend task. Then, back in our workspace, we use our script to connect to it.
+
+```sh
+./bin/ecs/connect-to-backend-flask <taskid>
+```
+
+Once in the task, we type `env` to see what environment variables are set.
+
+![image](https://user-images.githubusercontent.com/119984652/233783448-4f8d3d36-02ef-4512-b5a9-90bbcb66e310.png)
+
+After scrolling up, we see that the FRONTEND_URL and BACKEND_URL are being set. But they do not have protocols being set, so we again go back to our backend-flask.json task definition file and edit the variables for FRONTEND_URL AND BACKEND_URL.
+
+```json
           {"name": "FRONTEND_URL", "value": "https://thejoshdev.com"},
           {"name": "BACKEND_URL", "value": "https://api.thejoshdev.com"},
+```
+
+We again register the task definitions through the CLI, then force a new deployment through ECS. After waiting several moments for the new deployement, we can test the app again, and it's now returning data! 
+
+In investigating our app now that it's deployed, we ran into some debugging menus that we need to remove once we're in a production mode environment. Andrew finds documentation online regarding debugging application errors in production [here:](https://flask.palletsprojects.com/en/2.2.x/debugging/). We found that with debugging enabled in a production environment, "The debugger allows executing arbitrary Python code from the browser."
+
+Upon learning this, we navigate in AWS  over to EC2 and the security group for our load balancer. We edit the inbound rules, removing the open ports for 3000 and 4657, then for the time being, only allow `My IP` from both protocols HTTPS and HTTP and their respective ports, 443 and 80. This will lock the app down to where only I can access it for the time being. 
+
+Back in our workspace, we navigate to our `backend-flask` folder, select our Dockerfile and edit it, adding `--debug` to our CMD. This allows debugging in our development:
+
+```Dockerfile
+# CMD (Command)
+# python3 -m flask run --host=0.0.0.0 --port=4567
+CMD [ "python3", "-m" , "flask", "run", "--host=0.0.0.0", "--port=4567", "--debug"]
+```
+
+Then we create a new Dockerfile, `Dockerfile.prod`. This will be for production. Notice the flags on our CMD are slightly different than our development Dockerfile:
+
+```dockerfile
+FROM 99999999999.dkr.ecr.us-east-1.amazonaws.com/cruddur-python:3.10-slim-buster
+
+# [TODO] For debugging, don't leave these in
+#RUN apt-get update -y
+#RUN apt-get install iputils-ping -y
+# -------
+
+#  Inside Container
+# Make a new folder inside container
+WORKDIR /backend-flask
+
+# Outside Container -> Inside Container
+# this contains the libraries we want to install to run the app
+COPY requirements.txt requirements.txt
+
+# Inside Container
+# Install the python libraries used for the app
+RUN pip3 install -r requirements.txt
+
+# Outside Container -> Inside Container
+# . means everything in the current directory
+# first period . - /backend-flask (outside container)
+# second period ./backend-flask (inside container)
+COPY . .
+
+EXPOSE ${PORT}
+
+# CMD (Command)
+# python3 -m flask run --host=0.0.0.0 --port=4567
+CMD [ "python3", "-m" , "flask", "run", "--host=0.0.0.0", "--port=4567", "--no-debug", "--no-debugger", "--no-reload"]
+```
+
+To build our production Dockerfile separately, we go to the CLI. First we login to ECR again:
+
+```sh
+aws ecr get-login-password --region $AWS_DEFAULT_REGION | docker login --username AWS --password-stdin "$AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com"
+```
+
+With logging into the ECR being such a repetitive task, we decide to create a script for it. From our `backend-flask/bin` folder, we create a new folder named `ecr` then a new file named `login`. 
+
+```sh
+#! /usr/bin/bash
+
+aws ecr get-login-password --region $AWS_DEFAULT_REGION | docker login --username AWS --password-stdin "$AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com"
+```
+
+After chmod'ing the file, it's executable. We run the file, then proceed with building our production Dockerfile.
+
+```sh
+./bin/ecr/login
+
+
+docker build -f Dockerfile.prod -t backend-flask-prod .
+```
+
+To test this production build, we have to run the Dockerfile, passing our environment variables to it.
+
+```sh
+#! /usr/bin/bash
+
+docker run --rm \
+-p 4567:4567 \
+--env AWS_ENDPOINT_URL="http://dynamodb-local:8000" \
+--env CONNECTION_URL="postgresql://postgres:***************@db:5432/cruddur" \
+--env FRONTEND_URL="https://3000-${GITPOD_WORKSPACE_ID}.${GITPOD_WORKSPACE_CLUSTER_HOST}" \
+--env BACKEND_URL="https://4567-${GITPOD_WORKSPACE_ID}.${GITPOD_WORKSPACE_CLUSTER_HOST}" \
+--env OTEL_SERVICE_NAME='backend-flask' \
+--env OTEL_EXPORTER_OTLP_ENDPOINT="https://api.honeycomb.io" \
+--env OTEL_EXPORTER_OTLP_HEADERS="x-honeycomb-team=${HONEYCOMB_API_KEY}" \
+--env AWS_XRAY_URL="*4567-${GITPOD_WORKSPACE_ID}.${GITPOD_WORKSPACE_CLUSTER_HOST}*" \
+--env AWS_XRAY_DAEMON_ADDRESS="xray-daemon:2000" \
+--env AWS_DEFAULT_REGION="${AWS_DEFAULT_REGION}" \
+--env AWS_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID}" \
+--env AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY}" \
+--env ROLLBAR_ACCESS_TOKEN="${ROLLBAR_ACCESS_TOKEN}" \
+--env AWS_COGNITO_USER_POOL_ID="${AWS_COGNITO_USER_POOL_ID}" \
+--env AWS_COGNITO_USER_POOL_CLIENT_ID="99999999999999999" \
+-it backend-flask-prod
+```
+
+Before running this, we save it to a new folder in our `bin` directory, naming it `docker/backend-flask-prod`. We make the file executable by chmod'ing it, then run it. 
+
+![image](https://user-images.githubusercontent.com/119984652/233786447-a2f00f4b-f8a9-4618-89e2-653a45b9ee58.png)
+
+We get connection pool errors from the console, but this is because our PostgreSQL db is not running in the current environment, so we do a docker compose up on selective services, select our `db` then let it compose up.
+
+![image](https://user-images.githubusercontent.com/119984652/233786463-3787ecd7-7a30-430e-813c-64d5ec92828a.png)
+
+We're still having connections issues to the database, but that's not what we're concerned with here. We're trying to see if errors are logged in debug mode, so instead we go to our `app.py` file and introduce an error in the health-check. Then we go back and create a new folder within our `backend-flask/docker` folder named `build` then create two new files `backend-flask-prod` and `frontend-react-js-prod`. 
+
+```sh
+#! /usr/bin/bash
+
+docker build -f Dockerfile.prod -t backend-flask-prod .
+
+```
+
+```sh
+#! /usr/bin/bash
+
+docker build \
+--build-arg REACT_APP_BACKEND_URL="https://4567-$GITPOD_WORKSPACE_ID.$GITPOD_WORKSPACE_CLUSTER_HOST" \
+--build-arg REACT_APP_AWS_PROJECT_REGION="$AWS_DEFAULT_REGION" \
+--build-arg REACT_APP_AWS_COGNITO_REGION="$AWS_DEFAULT_REGION" \
+--build-arg REACT_APP_AWS_USER_POOLS_ID="us-east-1_9999999" \
+--build-arg REACT_APP_CLIENT_ID="999999999999999" \
+-t frontend-react-js \
+-f Dockerfile.prod \
+.
+```
+
+We then spin up our environment with the regular Dockerfile from the backend. With our non-production environment now running, we launch the backend of our app from our workspace, then modify the URL to direct to our health-check, adding `/api/health-check` to the end of our URL. The page returns a TypeError, due to the error we introduced earlier.
+
+![image](https://user-images.githubusercontent.com/119984652/233787410-88541b51-274c-403d-b208-eb9ab1197b55.png)
+
+Since we don't want to see the TypeError page, we test modifying the CMD from our Dockerfile. 
+
+```Dockerfile
+CMD [ "python3, "-m" , "flask, "run", "--host=0.0.0.0", "--port=4567", "--no-debug"]
+```
+
+We then compose up our environment again. Once it loads, we again launch our backend and modify the URL to direct to our health-check, which we introduced an error into previously.
+
+![image](https://user-images.githubusercontent.com/119984652/233787664-93bc22dc-c711-45a8-a8a6-31e15ab5da11.png)
+
+It now returns an Internal Server Error page, which means the flag we passed in our development Dockerfile worked. It's not in debug mode. We modify the development Dockerfile back, removing the `--no-debug` flag from the CMD. 
+
+We now chmod our two files we created earlier in the `docker` folder to make them exectuable. Then, we run the `backend-flask-prod` file to build the production environment again.
+
+```sh
+./bin/docker/build/backend-flask-prod
+```
+
+We create another script and folder, this time from the `docker` directory, a `push` folder, with a file named `backend-flask-prod`, then chmod the file.
+
+```sh
+#! usr/bin/bash
+
+ECR_FRONTEND_REACT_URL="$AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/frontend-react-js"
+echo $ECR_FRONTEND_REACT_URL
+docker tag backend-flask-prod:latest $ECR_BACKEND_FLASK_URL:latest
+docker push $ECR_BACKEND_FLASK_URL:latest
+```
+
+We run this file, and it tags and pushes the image. Instead of manually running all of these commands from the CLI, we decide to simplify things and begin working on creating scripts for all of this. In our `ecs` folder created previously, we create a new file `force-deploy-backend-flask`. Our goal with this file is to force a new deployment of the backend-flask service from ECS. 
+
+```sh
+
+#! /usr/bin/bash
+
+CLUSTER_NAME="cruddur"
+SERVICE_NAME="backend-flask"
+TASK_DEFINITION_FAMILY="backend-flask"
+
+LATEST_TASK_DEFINITION_ARN=$(aws ecs describe-task-definition \
+--task-definition $TASK_DEFINITION_FAMILY \
+--query 'taskDefinition.taskDefinitionArn' \
+--output text)
+
+echo "TASK DEF ARN:"
+echo $LATEST_TASK_DEFINITION_ARN
+
+aws ecs update-service \
+--cluster $CLUSTER_NAME \
+--service $SERVICE_NAME \
+--task-definition $LATEST_TASK_DEFINITION_ARN \
+--force-new-deployment
 ```
 
