@@ -1192,3 +1192,193 @@ aws ecs update-service \
 --force-new-deployment
 ```
 
+We were running into issues with pathing in our scripts, as we are now moving them to new directories, and additional folders have been created/removed. We moved the `/bin/` directory to the root of our workspace. A fellow bootcamper reached out to Andrew with a possible solution to the problem getting us the absolute path and implementing it into our scripts. We start with the `frontend-react-js-prod` script from earlier.
+
+```sh
+#! /usr/bin/bash 
+
+ABS_PATH=$(readlink -f "$0")
+BUILD_PATH=$(dirname $ABS_PATH)
+DOCKER_PATH=$(dirname $BUILD_PATH)
+BIN_PATH=$(dirname $DOCKER_PATH)
+PROJECT_PATH=$(dirname $BIN_PATH)
+FRONTEND_REACT_JS_PATH="$PROJECT_PATH/frontend-react-js"
+
+docker build \
+--build-arg REACT_APP_BACKEND_URL="https://4567-$GITPOD_WORKSPACE_ID.$GITPOD_WORKSPACE_CLUSTER_HOST" \
+--build-arg REACT_APP_AWS_PROJECT_REGION="$AWS_DEFAULT_REGION" \
+--build-arg REACT_APP_AWS_COGNITO_REGION="$AWS_DEFAULT_REGION" \
+--build-arg REACT_APP_AWS_USER_POOLS_ID="us-east-1_N7WWGl3KC" \
+--build-arg REACT_APP_CLIENT_ID="575n8ecqc551iscnosab6e0un3" \
+-t frontend-react-js \
+-f "$FRONTEND_REACT_JS_PATH/Dockerfile.prod" \
+"$FRONTEND_REACT_JS_PATH/."
+```
+
+We test the file and it builds. While waiting on this to build, we do the same to `backend-flask.prod`
+
+```sh
+#! /usr/bin/bash 
+
+ABS_PATH=$(readlink -f "$0")
+BUILD_PATH=$(dirname $ABS_PATH)
+DOCKER_PATH=$(dirname $BUILD_PATH)
+BIN_PATH=$(dirname $DOCKER_PATH)
+PROJECT_PATH=$(dirname $BIN_PATH)
+BACKEND_FLASK_PATH="$PROJECT_PATH/backend-flask"
+
+docker build \
+-f "$BACKEND_FLASK_PATH/Dockerfile.prod" \
+-t backend-flask-prod \
+"$BACKEND_FLASK_PATH/."
+```
+
+The next file we update pathing for is `./bin/ddb/seed`
+
+```python
+current_path = os.path.dirname(os.path.abspath(__file__))
+parent_path = os.path.abspath(os.path.join(current_path, '..', '..','backend-flask'))
+sys.path.append(parent_path)
+from lib.db import db
+```
+
+Then `./bin/db/schema-load`
+
+```sh
+#! /usr/bin/bash
+
+CYAN='\033[1;36m'
+NO_COLOR='\033[0m'
+LABEL="db-schema-load"
+printf "${CYAN}== ${LABEL}${NO_COLOR}\n"
+
+ABS_PATH=$(readlink -f "$0")
+BIN_PATH=$(dirname $ABS_PATH)
+PROJECT_PATH=$(dirname $BIN_PATH)
+BACKEND_FLASK_PATH="$PROJECT_PATH/backend-flask"
+schema_path="$BACKEND_FLASK_PATH/db/schema.sql"
+echo $schema_path
+
+if [ "$1" = "prod" ]; then
+  echo "Running in production mode"
+  URL=$PROD_CONNECTION_URL
+else
+  URL=$CONNECTION_URL
+fi
+
+psql $URL cruddur < $schema_path
+```
+
+Moving onto `./bin/db/seed`
+
+```sh
+#! /usr/bin/bash
+
+CYAN='\033[1;36m'
+NO_COLOR='\033[0m'
+LABEL="db-seed"
+printf "${CYAN}== ${LABEL}${NO_COLOR}\n"
+
+ABS_PATH=$(readlink -f "$0")
+BIN_PATH=$(dirname $ABS_PATH)
+PROJECT_PATH=$(dirname $BIN_PATH)
+BACKEND_FLASK_PATH="$PROJECT_PATH/backend-flask"
+seed_path="$BACKEND_FLASK_PATH/db/seed.sql"
+echo $seed_path
+
+if [ "$1" = "prod" ]; then
+  echo "Running in production mode"
+  URL=$PROD_CONNECTION_URL
+else
+  URL=$CONNECTION_URL
+fi
+
+psql $URL cruddur < $seed_path
+```
+
+`./bin/db/setup`
+
+```sh
+#! /usr/bin/bash
+set -e # stop if it fails at any point
+
+CYAN='\033[1;36m'
+NO_COLOR='\033[0m'
+LABEL="db-setup"
+printf "${CYAN}==== ${LABEL}${NO_COLOR}\n"
+
+ABS_PATH=$(readlink -f "$0")
+DB_PATH=$(dirname $ABS_PATH)
+
+source "$DB_PATH/drop"
+source "$DB_PATH/create"
+source "$DB_PATH/schema-load"
+source "$DB_PATH/seed"
+python "$DB_PATH/update_cognito_user_ids"
+
+```
+
+`./bin/db/update_cognito_user_ids`
+
+```python
+current_path = os.path.dirname(os.path.abspath(__file__))
+parent_path = os.path.abspath(os.path.join(current_path, '..', '..','backend-flask'))
+sys.path.append(parent_path)
+from lib.db import db
+```
+
+We then updated the path for Postgres in our `.gitpod.yml` file:
+
+```yml
+    command: |
+      export GITPOD_IP=$(curl ifconfig.me)
+      source  "$THEIA_WORKSPACE_ROOT/bin/rds/update-sg-rule"   
+```
+
+At this point, the Dockerfile we were building has completed. We now need to push and tag it. We already created a script to do this for our `backend-flask-prod`, now we need to create one for our frontend, so we create `frontend-react-js.prod` in the `./bin/docker/push` directory.
+
+```sh
+#! /usr/bin/bash
+
+ECR_FRONTEND_REACT_URL="$AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/frontend-react-js"
+echo $ECR_FRONTEND_REACT_URL
+
+docker tag frontend-react-js:latest $ECR_FRONTEND_REACT_URL:latest
+docker push $ECR_FRONTEND_REACT_URL:latest
+```
+
+After making the file executable with a chmod, we run the file to tag and push our frontend build. We decide to create a new `force-deploy` file for the frontend as well, since we already have one for the backend. In the `./bin/ecs` directory, we create `force-deploy-frontend-react-js`.
+
+```sh
+#! /usr/bin/bash
+
+CLUSTER_NAME="cruddur"
+SERVICE_NAME="frontend-react-js"
+TASK_DEFINITION_FAMILY="frontend-react-js"
+
+LATEST_TASK_DEFINITION_ARN=$(aws ecs describe-task-definition \
+--task-definition $TASK_DEFINITION_FAMILY \
+--query 'taskDefinition.taskDefinitionArn' \
+--output text)
+
+echo "TASK DEF ARN:"
+echo $LATEST_TASK_DEFINITION_ARN
+
+aws ecs update-service \
+--cluster $CLUSTER_NAME \
+--service $SERVICE_NAME \
+--task-definition $LATEST_TASK_DEFINITION_ARN \
+--force-new-deployment
+```
+
+We make this file executable with a chmod, then run the file. This forces a new deployment of the frontend image. We test our production backend by navigating to our custom domain, adding the additional subdomain and path: `https://api.thejoshdev.com/api/health-check` - this returns true. Next we introduce an error in the URL purposely, to make sure our debug menu doesn't appear - this returns an "Internal Server Error" so our debugging menu is not present. 
+
+Andrew begins to take us down the path to make sure that we're using Python in a safe way. We begin researching Flask debugging. Andrew begins telling us about Ruby Rack, and looks up the Python equivalent, which turns out to be WSGI. The built-in debugger for Flask is Werkzeug, which is a utility library for WSGI. We begin searching to see if we can run this in production mode. According to their documentation, it's intended only during local development. 
+
+![image](https://user-images.githubusercontent.com/119984652/233843793-79e4b39a-566d-4abb-b5de-9612bef66fc8.png)
+
+Andrew further clarified, asking ChatGPT why you can't use Werkzeug in production mode:
+
+![image](https://user-images.githubusercontent.com/119984652/233844078-9424d255-fc61-496b-8ccd-c5ea4cba7701.png)
+
+2. does not apply to us. We're terminating at the load balancer, so we don't need TLS.
