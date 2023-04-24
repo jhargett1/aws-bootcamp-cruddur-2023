@@ -1381,4 +1381,123 @@ Andrew further clarified, asking ChatGPT why you can't use Werkzeug in productio
 
 ![image](https://user-images.githubusercontent.com/119984652/233844078-9424d255-fc61-496b-8ccd-c5ea4cba7701.png)
 
-2. does not apply to us. We're terminating at the load balancer, so we don't need TLS.
+Andrew then discussed several different options for debugging including possibly Gunicorn, but said we'll have to see how things go moving forward. 
+
+Moving on, Andrew mentions that DynamoDB isn't working in production mode, so we are going to debug that. We go back to our production app, through the web browser. We're logged in, but there's no data.
+
+![image](https://user-images.githubusercontent.com/119984652/234130909-11d4c24c-5621-49bd-a956-daa651b92b10.png)
+
+After inspecting the page, we find that its doing a GET from the wrong location. Andrew suspects this is from pushing the image earlier. We go back to our `./bin/docker/build/frontend-react-js-prod` file and review our code.
+
+We update this:
+
+```sh
+docker build \
+--build-arg REACT_APP_BACKEND_URL="https://4567-$GITPOD_WORKSPACE_ID.$GITPOD_WORKSPACE_CLUSTER_HOST" \
+--build-arg REACT_APP_AWS_PROJECT_REGION="$AWS_DEFAULT_REGION" \
+--build-arg REACT_APP_AWS_COGNITO_REGION="$AWS_DEFAULT_REGION" \
+--build-arg REACT_APP_AWS_USER_POOLS_ID="us-east-1_9999999999" \
+--build-arg REACT_APP_CLIENT_ID="99999999999999999999" \
+-t frontend-react-js \
+-f "$FRONTEND_REACT_JS_PATH/Dockerfile.prod" \
+"$FRONTEND_REACT_JS_PATH/."
+```
+
+To this:
+
+```sh
+docker build \
+--build-arg REACT_APP_BACKEND_URL="https://api.thejoshdev.com" \
+--build-arg REACT_APP_AWS_PROJECT_REGION="$AWS_DEFAULT_REGION" \
+--build-arg REACT_APP_AWS_COGNITO_REGION="$AWS_DEFAULT_REGION" \
+--build-arg REACT_APP_AWS_USER_POOLS_ID="us-east-1_9999999999" \
+--build-arg REACT_APP_CLIENT_ID="99999999999999999999" \
+-t frontend-react-js \
+-f "$FRONTEND_REACT_JS_PATH/Dockerfile.prod" \
+"$FRONTEND_REACT_JS_PATH/."
+```
+
+Our environment variable for REACT_APP_BACKEND_URL was incorrect. We rebuild. 
+
+```sh
+./bin/docker/build/frontend-react-js-prod
+```
+
+After it builds, we push and tag it again as well: 
+
+```sh
+./bin/docker/push/frontend-react-js=prod
+```
+
+We then deploy it. 
+
+```sh
+./bin/ecs/force-deploy-frontend-react-js
+```
+
+We go back into ECS to check the status of the new deployment. After several moments, the deployment still hasn't shown as healthy yet, so we move over to EC2 and check the target groups. The old target group is still draining. This leads us to Andrew telling us about types of deployments and that when we deploy, we're doing an ECS deployment, which is according to AWS, "replacing the current running version of the container with the latest version. The number of containers ECS adds or removes from the service during a rolling update is controlled by adjusting the minimum and maxiumum number of healthy tasks allowed during a service dployment, as sepcified in the DeploymentConfiguration."
+
+After waiting a bit longer for the target group to drain, we decide to go ahead and navigate to our production app anyways. The page loads through Inspect in the browser with no errors this time. Through this process, Andrew decides finding the correct scripts to run from what directory is becoming quite combersome due to the amount of scripts that we have. To alleviate the difficulty with this, from with our `/bin/` directory, we create two folders: `frontend` and `backend`. We begin moving and renaming our various scripts, moving those related to `frontend-react-js` going to the frontend, those related to `backend-flask` to our backend folder. In our build scripts for the both the frontend and the backend, we had to update the pathing, as it has changed.
+
+```sh
+#for the backend
+
+ABS_PATH=$(readlink -f "$0")
+BACKEND_PATH=$(dirname $ABS_PATH)
+BIN_PATH=$(dirname $BACKEND_PATH)
+PROJECT_PATH=$(dirname $BIN_PATH)
+BACKEND_FLASK_PATH="$PROJECT_PATH/backend-flask"
+
+#for the frontend
+
+ABS_PATH=$(readlink -f "$0")
+FRONTEND_PATH=$(dirname $ABS_PATH)
+BIN_PATH=$(dirname $FRONTEND_PATH)
+PROJECT_PATH=$(dirname $BIN_PATH)
+FRONTEND_REACT_JS_PATH="$PROJECT_PATH/frontend-react-js"
+```
+
+We reload our production app at this point and we now have data! Now that we have fixed that issue, we move onto the Messages section. Messages are not populating, and Andrew suspects this is due to our local users not existing in the production database. We need to seed some users. We connect to the remote database through the Terminal.
+
+```sh
+./bin/db/connect prod
+```
+
+After connecting to the database, we run a `SELECT * FROM users;` which returns our Cognito account that we created previously. We need to populate some users so we have something to work with. For reference, we pull up `./backend-flask/db/seed.sql` and copy the command into the terminal connected to our Postgres database. 
+
+```sql
+INSERT INTO public.users (display_name, email, handle, cognito_user_id) VALUES ('Andrew Bayko','bayko@exampro.co' , 'bayko' ,'MOCK') 
+```
+
+Andrew accidentally copies the line with his user information again instead for the manual insert above, so when he tests the `/messages/new/bayko` page of his web app, his Inspect page comes back with a 500 error returned on the GET for `short`. 
+
+![image](https://user-images.githubusercontent.com/119984652/234137388-0d6ab4fa-7476-4bc1-a8a5-03c69b4831df.png)
+
+That leads us to go check out our Rollbar account to see if we have any error tracking. 
+
+![image](https://user-images.githubusercontent.com/119984652/234137908-c894a817-7d48-44ba-8a84-ab3ca9a341e0.png)
+
+Andrew shows us where the `short` that was returning the 500 error is coming from. We navigate to `/backend-flask/services/users_short.py` 
+
+![image](https://user-images.githubusercontent.com/119984652/234138767-b4c9688d-63d5-409f-8023-b5e1d423ce7a.png)
+
+We go back to Rollbar, check Cloudwatch logs, view RDS; none of these are showing us what the problem was. Eventually, from the terminal, we run a query: 
+
+```sql
+SELECT * FROM users;
+```
+
+At this point, Andrew sees that he's added himself twice to the database, but it raises the question. If our app did not find `/messages/new/bayko`why wasn't there an error other than a 500 error? We navigate to our `./backend-flask/lib/db.py` file and pull up our code:
+
+```python
+    with self.pool.connection() as conn:
+      with conn.cursor() as cur:
+        cur.execute(wrapped_sql,params)
+        json = cur.fetchone()
+        if json == None:
+          "{}"
+          else:
+            return json[0]
+```
+
+We want to see what's returning, so we docker compose up our local environment. 
