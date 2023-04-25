@@ -1500,4 +1500,331 @@ At this point, Andrew sees that he's added himself twice to the database, but it
             return json[0]
 ```
 
-We want to see what's returning, so we docker compose up our local environment. 
+We want to see what's returning, so we docker compose up our local environment. We need to seed data again, so we use this opportunity to run another script `./bin/db/setup`. The script won't run however, because the pathing is now incorrect since we restructured our `/bin/` folder. While working through the pathing, we're repeatedly running `./bin/db/setup`, but it's failing because there's sessions connected to the database that we're attempting to drop through part of the script. Eventually after composing our environment up and down several times with the same issue when trying to drop the database, we close out of our workspace, and start up a new one through Gitpod. We again run our `./bin/db/setup` file, this time it errors on an issue with pathing in the `./bin/db/seed` file. With the pathing fixed, we again try the `setup` file, but it again tells us the database is being accessed by other users when we attempt to drop the table. We quickly search for and find sufficient code to kill sessions to a Postgres database, then in our `./backend-flask/db` directory, we create `kill-all-connections.sql`.
+
+```sql
+SELECT pg_terminate_backend(pid)
+FROM pg_stat_activity
+WHERE   
+-- don't kill my own connection!
+pid <> pg_backend_pid()
+-- don't kill the connections to other databases
+AND datname = 'cruddur';    
+```
+
+Then, in `./bin/db` we create `kill-all`.
+
+```sh
+#! /usr/bin/bash
+
+CYAN='\033[1;36m'
+NO_COLOR='\033[0m'
+LABEL="db-kill-all"
+printf "${CYAN}== ${LABEL}${NO_COLOR}\n"
+
+ABS_PATH=$(readlink -f "$0")
+DB_PATH=$(dirname $ABS_PATH)
+BIN_PATH=$(dirname $DB_PATH)
+PROJECT_PATH=$(dirname $BIN_PATH)
+BACKEND_FLASK_PATH="$PROJECT_PATH/backend-flask"
+kill_path="$BACKEND_FLASK_PATH/db/kill-all-connections.sql"
+echo $kill_path
+
+psql $CONNECTION_URL cruddur < $kill_path
+```
+
+We test the script.
+
+```sh
+./bin/db/kill-all
+```
+
+It completes. We attempt to drop the database again.
+
+```sh
+./bin/db/drop
+```
+
+The database drops successfully this time. We again run our `setup` file.
+
+![image](https://user-images.githubusercontent.com/119984652/234407954-aaccc81b-a38a-4ed9-8b3b-98685efa0c2c.png)
+
+We view the pathing in our `update_cognito_user_ids` file. We needed to add 'backend-flask' to the path.
+
+```py
+current_path = os.path.dirname(os.path.abspath(__file__))
+parent_path = os.path.abspath(os.path.join(current_path, '..', '..','backend-flask'))
+sys.path.append(parent_path)
+from lib.db import db
+```
+
+We continue on, loading our Message data. 
+
+```sh
+./bin/ddb/schema-load
+```
+
+We attempt to seed the data running `./bin/ddb/seed` but we obtain a `ModuleNotFoundError: No module named 'lib'` error. We open `./bin/db/seed` and view the pathing. It needed updated as well, just the same as above. We make the same pathing change as above, then try running the `seed` file again. This time, it seeds our data. 
+
+With our local environment completely running now, we open the backend port in a browser, then check the path: `/api/users/@bayko/short` 
+
+![image](https://user-images.githubusercontent.com/119984652/234410238-4b55ac3b-6620-448a-804e-fc98942ed456.png)
+
+We open the frontend port instead, then sign into our web app. We see that we are not returning any data. A quick refresh of the browser, and data returns. We now navigate to the path `/messages/new/bayko` and Inspect the page. 
+
+![image](https://user-images.githubusercontent.com/119984652/234410975-d1f73386-b2ec-47b4-81d7-81708ffba491.png)
+
+It's returning what its supposed to now. We alter the path to a user that does not exist in our database. `/messages/new/asdfasdf`. The short now returns a 500 error. 
+
+![image](https://user-images.githubusercontent.com/119984652/234411509-35c35f1b-79d7-4b5f-b289-0028dc541e83.png)
+
+We check the `backend-flask` logs through our terminal:
+
+![image](https://user-images.githubusercontent.com/119984652/234411693-3919d68c-c94f-494a-a6f1-ae414c254978.png)
+
+The data returning is not what is expected. We open our `users_short.py` and our `backend-flask/lib/db.py` files. Andrew explains that he had thought `json` would return None, but it's returning something. So we begin debugging by printing a few lines.
+
+![image](https://user-images.githubusercontent.com/119984652/234413246-cf0adbdb-4ef6-4b78-8306-d3e66a75fd59.png)
+
+Immediately Andrew recongnizes what the problem is. We needed to add a return.
+
+```python
+    with self.pool.connection() as conn:
+      with conn.cursor() as cur:
+        cur.execute(wrapped_sql,params)
+        json = cur.fetchone()
+        if json == None:
+          return "{}"
+          else:
+            return json[0]
+```
+
+With the return added, we refresh the web app, then inspect the page again.
+
+![image](https://user-images.githubusercontent.com/119984652/234413665-07321728-df15-4f52-88f5-bdb3d029d144.png)
+
+It's returning what it's supposed to return now. We're ready to push the changes to production, so we run our build script for our backend. 
+
+```sh
+./bin/backend/build
+```
+
+![image](https://user-images.githubusercontent.com/119984652/234414336-de65abdd-b725-43a0-9ee9-41d5aff0b23d.png)
+
+We need to update the pathing in our `build` script. 
+
+```sh
+ABS_PATH=$(readlink -f "$0")
+BACKEND_PATH=$(dirname $ABS_PATH)
+BIN_PATH=$(dirname $BACKEND_PATH)
+PROJECT_PATH=$(dirname $BIN_PATH)
+BACKEND_FLASK_PATH="$PROJECT_PATH/backend-flask"
+```
+
+We go ahead and fix the pathing in our `./bin/frontend/build` script as well:
+
+```sh
+ABS_PATH=$(readlink -f "$0")
+FRONTEND_PATH=$(dirname $ABS_PATH)
+BIN_PATH=$(dirname $FRONTEND_PATH)
+PROJECT_PATH=$(dirname $BIN_PATH)
+FRONTEND_REACT_JS_PATH="$PROJECT_PATH/frontend-react-js"
+```
+
+We run the `build` script for the backend again, this time it works. We tag and push the image again as well. 
+
+```sh
+./bin/backend/push
+
+./bin/backend/deploy
+```
+
+We connect to our production database through the terminal.
+
+```sh
+./bin/db/connect prod
+```
+
+From the terminal, we manually insert a user into the database:
+
+```SQL
+INSERT INTO public.users (display_name, email, handle, cognito_user_id) VALUES ('Andrew Bayko', 'bayko@exampro.co' , 'bayko' ,'MOCK');
+```
+
+From our production web app, we go again to `/messages/new/bayko`, then inspect the page. We return all 200 statuses.  When we test the app to send a message, it works!
+
+![image](https://user-images.githubusercontent.com/119984652/234416272-fb813ad6-6dd8-4989-9154-4055dc779a99.png)
+
+We now direct our attention towards an issue we've been having with our Cognito token. Our `frontend-react-js/src/lib/CheckAuth.js` file declares a const for checkAuth that we thought would attempt to renew our Cognito token. It has not been doing so. Andrew explains we're going to have to wrap this in another function to make sure this gets set. We research token refresh for AWS Cognito using Amplify, noting a possible solution using `Auth.currentSession`, then go back to our code for `CheckAuth.js`
+
+```js
+const checkAuth = async (setUser) => {
+  Auth.currentAuthenticatedUser({
+    // Optional, By default is false.
+    // If set to true, this call will send a 
+    // request to Cognito to get the latest user data
+    bypassCache: false
+  })
+  .then((user) => {
+    console.log('user',user);
+    return Auth.currentAuthenticatedUser()
+  }).then((cognito_user) => {
+      console.log('cognito_user',cognito_user);
+      setUser({
+        display_name: cognito_user.attributes.name,
+        handle: cognito_user.attributes.preferred_username
+      })
+```
+
+It looks like `Auth.currentAuthenticatedUser` is getting called twice and Andrew's not sure why that was, so we logged out the data. Then we reloaded the page and inspected it. 
+
+![image](https://user-images.githubusercontent.com/119984652/234421141-1ea7d683-0594-4d2a-913e-27da3f72d583.png)
+
+The same information is being returned twice. Looks like we will be using `Auth.currentSession`. We update our code.
+
+```js
+const checkAuth = async (setUser) => {
+  Auth.currentAuthenticatedUser({
+    // Optional, By default is false.
+    // If set to true, this call will send a 
+    // request to Cognito to get the latest user data
+    bypassCache: false
+  })
+  .then((cognito_user) => {
+    console.log('cognito_user',cognito_user);
+    setUser({
+        display_name: cognito_user.attributes.name,
+        handle: cognito_user.attributes.preferred_username
+      })
+    return Auth.currentSession()
+  }).then((cognito_user) => {
+      console.log('cognito_user_session',cognito_user_session);
+      localStorage.setItem("access_token", cognito_user_session.accessToken.jwtToken)
+  })
+  .catch((err) => console.log(err));
+  
+```
+
+Andrew explains that we're going to have to do this check every time we do API calls as well, so we will likely need to wrap this around other functions. From `CheckAuth.js` we create a new function, making a call to the `Auth.currentSession`. 
+
+```js
+const getAccessToken = async () => {
+  Auth.currentSession()
+  .then((cognito_user_session) => {
+    localStorage.setItem("access_token", cognito_user_session.accessToken.jwtToken);
+    return localStorage.getItem("access_token")
+    
+  })   
+  .catch((err) => console.log(err));
+}
+```
+
+From our `HomeFeedPage.js` we adjust our API call to pass along `getAccesstoken`. We also import from `CheckAuth.js` 
+
+```js
+import {checkAuth, getAccessToken} from 'lib/CheckAuth';
+
+  const loadData = async () => {
+    try {
+      const backend_url = `${process.env.REACT_APP_BACKEND_URL}/api/activities/home`
+      const access_token = getAccessToken()
+      console.log('access_token',access_token)
+      const res = await fetch(backend_url, {
+        headers: {
+          Authorization: `Bearer ${access_token}`
+        },
+        method: "GET"
+      });
+```
+
+We test our local web app. 
+
+![image](https://user-images.githubusercontent.com/119984652/234427066-d1e1058d-dba3-4517-8c2b-28bb6c7c7149.png)
+
+This could be due to the updated code, so we find and replace all instances of `import CheckAuth` with `import {checkAuth}`. Then we refresh the page. This makes no change. As it turns out, we need to export our functions from `CheckAuth.js`.
+
+```js
+export async function getAccessToken(){
+  Auth.currentSession()
+  .then((cognito_user_session) => {
+    localStorage.setItem("access_token", cognito_user_session.accessToken.jwtToken);
+    return localStorage.getItem("access_token")
+    
+  })   
+  .catch((err) => console.log(err));
+}
+
+export async function checkAuth(setUser){
+  Auth.currentAuthenticatedUser({
+    // Optional, By default is false.
+    // If set to true, this call will send a 
+    // request to Cognito to get the latest user data
+    bypassCache: false
+  })
+  .then((cognito_user) => {
+    console.log('cognito_user',cognito_user);
+    setUser({
+        display_name: cognito_user.attributes.name,
+        handle: cognito_user.attributes.preferred_username
+      })
+    return Auth.currentSession()
+  }).then((cognito_user) => {
+      console.log('cognito_user_session',cognito_user_session);
+      localStorage.setItem("access_token", cognito_user_session.accessToken.jwtToken)
+  })
+  .catch((err) => console.log(err));
+
+  
+```
+
+We reload the web app again, and it is again displaying correctly. However, one of our console.logs are coming back with `access_token` undefined. We again review our code both for the API call in `HomeFeedPage.js` and the getAccessToken function in `CheckAuth.js`
+
+```js
+export async function getAccessToken(){
+  Auth.currentSession()
+  .then((cognito_user_session) => {
+    const access_token = cognito_user_session.accessToken.jwtToken
+    console.log('11',access_token)
+    localStorage.setItem("access_token", access_token)
+  })   
+  .catch((err) => console.log(err));
+}
+```
+
+Note that we console.log the same information in both files. 
+
+
+```js
+  const loadData = async () => {
+    try {
+      const backend_url = `${process.env.REACT_APP_BACKEND_URL}/api/activities/home`
+      await getAccessToken()
+      const access_token = localStorage.getItem("access_token")
+      console.log('22',access_token)
+      const res = await fetch(backend_url, {
+        headers: {
+          Authorization: `Bearer ${access_token}`
+        },
+        method: "GET"
+      });
+```
+
+We again refresh the page and inspect it. It's identical information.
+
+![image](https://user-images.githubusercontent.com/119984652/234430724-0e86cd15-bb19-474e-a693-f49d70c4ed80.png)
+
+We do a find and replace on every file in our workspace that contains `Authorization`, then add a line to import our new functions.
+
+```js
+import {checkAuth, getAccessToken} from '../lib/CheckAuth';
+```
+
+Then, wherever `Authorization` appears, in these cases passing our Authorization headers for CORS, we're also adding two lines of code above it:
+
+```js
+await getAccessToken()
+const access_token = localStorage.getItem("access_token")
+```
+
+We refresh our web app, then click through the various pages. Of the pages currently connected correctly, our token stays logged in now. When we inspect, we get back nothing but 200 status codes, so we're in good shape. 
+
