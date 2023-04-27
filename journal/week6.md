@@ -1828,3 +1828,460 @@ const access_token = localStorage.getItem("access_token")
 
 We refresh our web app, then click through the various pages. Of the pages currently connected correctly, our token stays logged in now. When we inspect, we get back nothing but 200 status codes, so we're in good shape. 
 
+Moving on, we decide we want to implement XRay back into our application. Andrew shows us a Cloudformation task definition file where we view the code for XRay.
+
+```yaml
+- Name: xray
+  Image: public.ecr.aws/xray/aws-xray-daemon
+  Essential: true
+  User: '1337'
+  LogConfiguration:
+      LogDriver: awslogs
+      Options:
+        awslogs-group: !Ref AWS::StackName
+        awslogs-region: !Ref AWS::Region
+        awslogs-stream-prefix: app
+```
+
+We copy the code and begin converting it to `.json` by writing it to our `./aws/task-definitions/backend-flask.json` file
+
+```json
+      {
+        "name": "xray",
+        "image": "public.ecr.aws/xray/aws-xray-daemon",
+        "essential": true,       
+        "user": "1337",
+        "portMappings": [
+          {
+            "name": "xray",
+            "containerPort": 2000,
+            "protocol": "udp"
+          }
+        ]        
+      },
+```
+
+We continue prepping for another deployment, now creating a new script to easily register task definitions so we don't have to manually run the command. We create `./bin/backend/register`
+
+```sh
+#! /usr/bin/bash
+
+ABS_PATH=$(readlink -f "$0")
+BACKEND_PATH=$(dirname $ABS_PATH)
+BIN_PATH=$(dirname $BACKEND_PATH)
+PROJECT_PATH=$(dirname $BIN_PATH)
+TASK_DEF_PATH="$PROJECT_PATH/aws/task-definitions/backend-flask.json"
+
+echo $TASK_DEF_PATH
+
+aws ecs register-task-definition \
+--cli-input-json "file://$TASK_DEF_PATH"
+```
+
+While troubleshooting the pathing for this script, we found that our build scripts had incorrect pathing since the `bin` directory move, so we fix this as well. 
+
+```sh
+ABS_PATH=$(readlink -f "$0")
+BACKEND_PATH=$(dirname $ABS_PATH)
+BIN_PATH=$(dirname $BACKEND_PATH)
+PROJECT_PATH=$(dirname $BIN_PATH)
+BACKEND_FLASK_PATH="$PROJECT_PATH/backend-flask"
+```
+
+```sh
+ABS_PATH=$(readlink -f "$0")
+FRONTEND_PATH=$(dirname $ABS_PATH)
+BIN_PATH=$(dirname $FRONTEND_PATH)
+PROJECT_PATH=$(dirname $BIN_PATH)
+FRONTEND_REACT_JS_PATH="$PROJECT_PATH/frontend-react-js"
+```
+
+Then we create one for the frontend.
+
+```sh
+#! /usr/bin/bash
+
+ABS_PATH=$(readlink -f "$0")
+FRONTEND_PATH=$(dirname $ABS_PATH)
+BIN_PATH=$(dirname $FRONTEND_PATH)
+PROJECT_PATH=$(dirname $BIN_PATH)
+TASK_DEF_PATH="$PROJECT_PATH/aws/task-definitions/frontend-react-js.json"
+
+echo $TASK_DEF_PATH
+
+aws ecs register-task-definition \
+--cli-input-json "file://$TASK_DEF_PATH"
+```
+
+We chmod both files to make them executable, then we run the file for the backend.
+
+```sh
+./bin/backend/register
+```
+
+After fixing some syntax issues with the task definition file for the backend, our script works. XRay should now be available, but only on the next deployment. So we again need to deploy. 
+
+```sh
+./bin/backend/deploy
+```
+
+We go back into ECS from the AWS Console to check our deployment. We go into our `cruddur` cluster, then select the `backend-flask` service. Our service did not deploy the latest task when checking this. To troubleshoot, we go back to our workspace and manually deploy the backend from the CLI.
+
+```sh
+aws ecs describe-task-definition \
+--task-definition $TASK_DEFINITION_FAMILY \
+--query 'taskDefinition.taskDefinitionArn' \
+--output text
+```
+
+The CLI outputs `backend-flask:13`. This IS our latest task. We deploy again running our `./bin/backend/deploy` script. Next, we go back into ECS and view our cluster. We can see the `backend-flask` service is working on the deployment, so we click into the service, then view the latest task.
+
+![image](https://user-images.githubusercontent.com/119984652/234706484-e3ade2f7-eda6-481c-a1b0-08b623112b7d.png)
+
+XRay is running, but it's health status is unknown. While researching possible ways to implement a health check for XRay, we come back to ECS to find that our `backend-flask` task is unhealthy. We check the logs for the task, and all it is returning is 200 statuses, passing our `api/health-check`. 
+
+We decide to force a new deployment from the AWS console. This new deployment is coming back unhealthy as well, yet our logs indicate its passing them. 
+
+![image](https://user-images.githubusercontent.com/119984652/234708152-f900d015-bf7e-4660-b6e6-c0c0f522d567.png)
+
+We update our `aws/task-definitions/backend-flask.json` by removing the portion of the definition for XRay, then we again register the task definition, then again deploy it. After this, we check ECS and again the task is failing due to health checks.
+
+![image](https://user-images.githubusercontent.com/119984652/234708746-dbef2db9-ff61-4354-8dad-b7c9ecbcaa3a.png)
+
+Since it's not causing the problem, we add XRay back to our task definition, then re-register it. To continue troubleshooting, we build our environment locally:
+
+```sh
+./bin/backend/build
+```
+
+Then we Docker compose up selected services, just `db` and `dynamodb-local`. 
+
+We create our data.
+
+```sh
+./bin/db/setup
+```
+
+We create another script, this time `./bin/backend/run`. 
+
+```sh
+#! /usr/bin/bash
+
+docker run --rm \
+  -p 4567:4567
+  -it backend-flask-prod
+```
+
+We chmod the file to make it executable, then we try to run it, but it fails. Andrew explains this is because it is missing our environment variables. It's looking for an .env file containing our variables. From the root of our workspace, we create two new files: `.env.backend-flask` and `.env.frontend-react-js`. We cut all of our env vars from our `docker-compose.yml` and paste them into their respective `.env` file. We then correct the syntax of the variables going from a `.yml` format to an `.env`. We then update our `docker-compose.yml` to point to our new `.env` files. 
+
+```yml
+services:
+  backend-flask:
+    env_file:
+      - .env.backend-flask    
+```
+
+```yml
+  frontend-react-js:
+    env_file:
+      - .env.frontend-react-js
+```
+
+Next, we have to update our `run` file to use to env vars.
+
+```sh
+#! /usr/bin/bash 
+
+ABS_PATH=$(readlink -f "$0")
+BACKEND_PATH=$(dirname $ABS_PATH)
+BIN_PATH=$(dirname $BACKEND_PATH)
+PROJECT_PATH=$(dirname $BIN_PATH)
+ENVFILE_PATH="$PROJECT_PATH/.env.backend-flask"
+
+docker run --rm \
+  --env-file $ENVFILE_PATH \
+  --publish 4567:4567 \
+  -it backend-flask-prod
+```
+
+Before we move further with this, we decide to test the changes we've made by composing down our environment, then Docker compose up for the whole environment. We view the frontend of the app, where there's no data returned. We attach a shell of the backend through terminal, then run an `env` command. All of our environment variables return as expected. 
+
+We compose down our entire environment, then again Docker compose up, this time just selected services `db` , `dynamodb-local` , and `xray-daemon`. To make sure we have seeded data, we again run our `./bin/db/setup`. 
+
+We start our environment locally.
+
+```sh
+./bin/backend/run
+```
+
+Amongst other errors in the terminal, we are getting this as well:
+
+![image](https://user-images.githubusercontent.com/119984652/234716155-e362548e-40e0-4b28-b916-a3c06e304a35.png)
+
+After some time to research this, Andrew believes the issue is due to how containers handle their network. Since XRay is ran as its own container, its using localhost. However, if we add a new service definition to our `docker-compose.yml`, that could fix the issue. We set the network through the CLI:
+
+```sh
+docker network create cruddur-net
+```
+
+We read further into our `docker-compose.yml` file and see that a network is already named `cruddur`. We check networks for Docker from the CLI:
+
+```sh
+docker network list
+```
+
+![image](https://user-images.githubusercontent.com/119984652/234717644-61ec1104-6bb6-48d8-a600-7f3624cec44f.png)
+
+We need to find out how to name the user defined networks in Docker. After checking Docker Docs documentation, we update `docker-compose.yml` 
+
+```yml
+networks: 
+  default:
+    driver: bridge
+    name: cruddur-net
+```
+
+We also update `./bin/backend/run`
+
+```sh
+#! /usr/bin/bash 
+
+ABS_PATH=$(readlink -f "$0")
+BACKEND_PATH=$(dirname $ABS_PATH)
+BIN_PATH=$(dirname $BACKEND_PATH)
+PROJECT_PATH=$(dirname $BIN_PATH)
+ENVFILE_PATH="$PROJECT_PATH/.env.backend-flask"
+
+docker run --rm \
+  --env-file $ENVFILE_PATH \
+  --network cruddur-net \
+  --publish 4567:4567 \
+  -it backend-flask-prod
+```
+
+We compose down our environment again, then compose up our 3 selected services again: `db` , `dynamodb-local` , and `xray-daemon`. We again seed our data, then try again to run our environment.  It's returning the same issue as it was above. Andrew gets a second look at the code with Bayko and it turns out the issue is how we're passing the env vars. We decide to generate out our environment variables each time our environment loads. To do this, we decide to implement Ruby. 
+
+We begin by creating a new script in `./bin/backend` named `generate-env`. 
+
+```sh
+#!/usr/bin/env ruby
+
+require 'erb'
+
+template = File.read 'env.backend-flask.erb'
+script_content = ERB.new(template).result(binding)
+
+```
+
+This is going to read from a file named `env.backend-flask.erb` for our env vars, so in the root of our workspace, we create `.env.backend-flask.erb`. We copy/paste all of our environment variables from `.env.backend-flask.erb` to the new file, changing the syntax for an `.erb` file. We have to render our `.erb` file and send it to a directory, so we update `./bin/backend/generate-env`.
+
+```sh
+#!/usr/bin/env ruby
+
+require 'erb'
+
+template = File.read '.env.backend-flask.erb'
+content = ERB.new(template).result(binding)
+filename = ".env.backend-flask"
+File.write(filename, content)
+
+```
+
+After testing the script works, we delete the manually created .env.backend-flask file from earlier. Next, we create a new folder from the root of the workspace and named it `erb`. We move the `.env.backend-flask.erb` file we created previously into this folder. Then we create a new file `.env.frontend-react-js.erb`, and copy/paste our env vars from `.env.frontend-react-js` to the new file, making syntax changes to the `.erb` format. 
+
+In `./bin/frontend` we create a new file named `generate-env` as well. It's during the creation of this script that we realize we've set our `.gitignore` file to not pay attention to files ending in `.env`, not how we've named them here. We go back and fix `./bin/backend/generate-env` then complete `./bin/frontend/generate-env`
+
+```sh
+#!/usr/bin/env ruby
+
+require 'erb'
+
+template = File.read 'erb/backend-flask.env.erb'
+content = ERB.new(template).result(binding)
+filename = "backend-flask.env"
+File.write(filename, content)
+```
+
+
+```sh
+#!/usr/bin/env ruby
+
+require 'erb'
+
+template = File.read 'erb/frontend-react-js.env.erb'
+content = ERB.new(template).result(binding)
+filename = 'frontend-react-js.env'
+File.write(filename, content)
+```
+
+In our `erb` directory, we rename these files as well. 
+
+![image](https://user-images.githubusercontent.com/119984652/234723564-be858e1e-9b7a-4d2e-b99d-adcf101399ef.png)
+
+We test both scripts.
+
+```sh
+./bin/frontend/generate-env
+```
+
+```sh
+./bin/backend/generate-env
+```
+
+This generates our `backend-flask.env` and `frontend-react-js.env` files.
+
+![image](https://user-images.githubusercontent.com/119984652/234724168-9c121093-d99f-4af8-9ea3-8e1fc55f66ad.png)
+
+So we can ensure these variables are accessible whenever we launch our workspace, we decide to add these scripts to run in our `.gitpod.yml` file. 
+
+For our frontend:
+
+```yml
+  - name: react-js
+    command: |
+      ruby "$THEIA_WORKSPACE_ROOT/bin/frontend/generate-env"
+```
+
+For our backend:
+
+```yml
+  - name: flask 
+    command: |
+      ruby "$THEIA_WORKSPACE_ROOT/bin/backend/generate-env"
+```
+
+Initially in the video, the code above is using `source "$THEIA_WORKSPACE_ROOT/bin/frontend/generate-env"` and `source "$THEIA_WORKSPACE_ROOT/bin/backend/generate-env"` but this did not work, as these are Ruby scripts. Changing the command to `ruby` fixed the issue. 
+
+We go back to our `docker-compose.yml` file and update the chagne to the `env_file` names.
+
+```yml
+  backend-flask:
+    env_file:
+      - backend-flask.env
+```
+
+```yml
+  frontend-react-js:
+    env_file:
+      - frontend-react-js.env
+```
+
+Next we update the pathing in our `./bin/backend/run` file.
+
+```sh
+#! /usr/bin/bash 
+
+ABS_PATH=$(readlink -f "$0")
+BACKEND_PATH=$(dirname $ABS_PATH)
+BIN_PATH=$(dirname $BACKEND_PATH)
+PROJECT_PATH=$(dirname $BIN_PATH)
+ENVFILE_PATH="$PROJECT_PATH/backend-flask.env"
+
+docker run --rm \
+  --env-file $ENVFILE_PATH \
+  --network cruddur-net \
+  --publish 4567:4567 \
+  -it backend-flask-prod
+```
+
+We find we never made a `run` file for the frontend, so we do so now. `./bin/frontend/run`
+
+```sh
+#! /usr/bin/bash 
+
+ABS_PATH=$(readlink -f "$0")
+BACKEND_PATH=$(dirname $ABS_PATH)
+BIN_PATH=$(dirname $BACKEND_PATH)
+PROJECT_PATH=$(dirname $BIN_PATH)
+ENVFILE_PATH="$PROJECT_PATH/frontend-react-js.env"
+
+docker run --rm \
+  --env-file $ENVFILE_PATH \
+  --network cruddur-net \
+  --publish 4567:4567 \
+  -it frontend-react-js-prod
+```
+
+We also take this time to update our network for each service in our `docker-compose.yml` file. Andrew stresses at this time that we have to set all of our containers to connect to the same network. 
+
+```yml
+networks: 
+  cruddur-net:
+    driver: bridge
+    name: cruddur-net
+```
+
+We again run `./bin/backend/run`.
+
+![image](https://user-images.githubusercontent.com/119984652/234726073-fed4546d-b7c2-466c-90d6-968738b4136d.png)
+
+We're getting these same errors again. Andrew mentions we can install Busybox to debug these connections. From `./bin` we create `busybox`. 
+
+```sh
+#! /usr/bin/bash 
+
+
+docker run --rm \
+  --network cruddur-net \
+  --publish 4567:4567 \
+  -it busybox
+```
+
+We make the file executable, then run the file.
+
+```sh
+./bin/busybox
+```
+
+We're able to ping XRay to see that it's running.
+
+![image](https://user-images.githubusercontent.com/119984652/234726705-ff9e000d-288d-4c36-b125-2079663deb49.png)
+
+To test the issue in our production environment, we temporarily install `ping` and `telnet` in our production environment. We open `/backend-flask/Dockerfile.prod` and add a line to install it. 
+
+```dockerfile
+# [TODO] For debugging, don't leave these in
+RUN apt-get update =y
+RUN apt-get install iputils-ping -y
+# -------------
+```
+
+Then we build the environment.
+
+```sh
+./bin/backend/build
+```
+
+We temporarily add `/bin/bash` to the `-it frontend-react-js-prod` argument in `./bin/backend/run`, so when we run the script, we automatically shell in.
+
+```sh
+./bin/backend/run
+```
+
+We have access to ping from here. We're again able to ping XRay.
+
+![image](https://user-images.githubusercontent.com/119984652/234727954-b5e4891c-bcc7-455a-a3b4-dbcb68f065ae.png)
+
+We again shell into our backend and view our environment variables, cross referencing this with what's generated in our `backend-flask.env` We found that what's generated has quotations around the variables whereas the environment variables when shelled into the backend show no quotations. We manually update the `backend-flask.env` file to remove all quotes around the variables, then again try `./bin/backend/run`. It's running.
+
+![image](https://user-images.githubusercontent.com/119984652/234728991-fcefb0be-01fd-4ed6-83c7-1dc92b8cd928.png)
+
+To fix this permanently, we must update our `.erb` templates in our `erb` directory. We remove all quotes (singles and doubles) from all variables. We manually delete our existing `.env` files, then run our frontend and backend `generate-env` scripts to recreate them. When we check these `.env` files, they do not have any quotations. We want to make sure that Docker compose will still work, so we compose down our environment, then do a Docker compose up. Everything is in working order again! 
+
+We comment out the debugging code we added to `backend-flask/Dockerfile.prod`. Back to our original issue with the health check failing for the backend, we open up our `aws/task-definitions/backend-flask.json` file. Andrew believes he's found the problem. 
+
+![image](https://user-images.githubusercontent.com/119984652/234730021-2bcff2c0-7b13-41d2-bd23-9548082a10ae.png)
+
+When we moved our `bin` directory, the path to this health check moved. To fix this issue, we create a new `bin` folder in `backend-flask`. We then move our `health-check` file from `./bin/flask` to `backend-flask/bin` and delete the `./bin/flask` folder. We then update the path to the health check in `./aws/task-definitions/backend-flask.json`. 
+
+```json
+        "name": "backend-flask",
+        "image": "554621479919.dkr.ecr.us-east-1.amazonaws.com/backend-flask",
+        "essential": true,
+        "healthCheck": {
+          "command": [
+            "CMD-SHELL",
+            "python /backend-flask/bin/health-check"
+          ],
+```
+
