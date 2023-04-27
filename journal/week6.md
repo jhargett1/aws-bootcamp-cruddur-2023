@@ -2311,7 +2311,7 @@ We check on our backend service through ECS in AWS again. The service task is sh
         "interval": 30,
         "timeout": 5,
         "retries": 3,
-        "startPeriod": 69
+        "startPeriod": 60
 ```
 
 Then, we re-register the task definition.
