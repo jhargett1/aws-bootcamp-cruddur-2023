@@ -2276,7 +2276,7 @@ When we moved our `bin` directory, the path to this health check moved. To fix t
 
 ```json
         "name": "backend-flask",
-        "image": "554621479919.dkr.ecr.us-east-1.amazonaws.com/backend-flask",
+        "image": "999999999.dkr.ecr.us-east-1.amazonaws.com/backend-flask",
         "essential": true,
         "healthCheck": {
           "command": [
@@ -2285,3 +2285,168 @@ When we moved our `bin` directory, the path to this health check moved. To fix t
           ],
 ```
 
+With our task definition updated, we have to rebuild the backend container again. 
+
+```sh
+./bin/backend/build
+```
+
+We next push the backend container.
+
+```sh
+./bin/backend/push
+```
+
+Then, when we try to register our task definition, we get an `AccessDeniedException` when calling the `RegisterTaskDefinition` operation. There's an issue with IAM in AWS. As it turns out, while committing our code along with Andrew, a temp file was committed as well, exposing an AWS key. We had to login to IAM as the root user, remove the explicit deny from the user created for our workspace, then rotate out my AWS keys. I then updated the env vars in our workspace with an `export` and `gp env`. 
+
+With the issue resolved, we again register the backend task definition.
+
+```sh
+./bin/backend/register
+```
+
+We check on our backend service through ECS in AWS again. The service task is showing unhealthy. We go back to our task definition code, and update the `timeout` from 15 to 5 seconds.
+
+```json
+        "interval": 30,
+        "timeout": 5,
+        "retries": 3,
+        "startPeriod": 69
+```
+
+Then, we re-register the task definition.
+
+```sh
+./bin/backend/register
+```
+
+For good measure, we redeploy the service.
+
+```sh
+./bin/backend/deploy
+```
+
+Back over in ECS, we again check the backend service. 
+
+![image](https://user-images.githubusercontent.com/119984652/234994593-f10b90cf-a6a6-48fa-a13b-ae4211d4839b.png)
+
+The task status is pending, so we wait for it to complete. A few moments later, the task is now healthy! 
+
+![image](https://user-images.githubusercontent.com/119984652/234994840-776e1d18-6faf-4f86-8e98-a18ffd85452a.png)
+
+XRay continues to show Unknown for Health status, but that's because we have no way of adding a health check to it since `curl` is not installed in the default container. Speaking of XRay, we add it to our `frontend` task definition.
+
+```json
+    "containerDefinitions": [
+      {
+        "name": "xray",
+        "image": "public.ecr.aws/xray/aws-xray-daemon",
+        "essential": true,       
+        "user": "1337",
+        "portMappings": [
+          {
+            "name": "xray",
+            "containerPort": 2000,
+            "protocol": "udp"
+          }
+        ]        
+      }, 
+```
+
+Then we register the task definition.
+
+```sh
+./bin/frontend/register
+```
+
+Then we deploy it.
+
+```sh
+./bin/frontend/deploy
+```
+
+Back over in ECS, we again view our services. They're running. 
+
+![image](https://user-images.githubusercontent.com/119984652/234997510-903e3be1-bfe3-484b-8a39-f709b758b6f8.png)
+
+From our cluster, we select `Update Cluster` , then expand Monitoring and select "Use Container Insights." Over time, these logs will continue to gather data. It's good to set this now, preparing for later. 
+
+I also watched Ashish's Security Considerations video for Weeks 6-7. I kept detailed notes:
+
+```txt
+Week 6-7 Security Considerations Notes
+What type of Container Services in AWS? 
+-	Virtual machine
+Managed Services: 
+-	ECS
+-	Fargate
+-	EKS
+Launch types to AWS: 
+EC2 – ELB to auto scaling groups – contains EC2 instances – AWS manages VM and physical server
+ECS – ELB to ECS cluster to auto scaling groups – contains EC2 instances – non managed
+Fargate – ELB to ECS cluster to Fargate tasks – Amazon manages everything but containerized apps 
+Security challenges with Fargate: 
+-	No visibility of infrastructure
+-	Ephemeral resources make it hard to do triage or forensics for detected threats
+-	No file/network monitoring
+-	Cannot run traditional security agents in Fargate
+-	User can run unverified Container images
+-	Containers can run as root and even with elevated privileges 
+Amazon ECS – Security Best Practices - AWS
+-	Cloud control plane configuration – access control, container images, etc
+-	Choosing the right public or private ECR for images
+-	Amazon ECR Scan Images to “Scan on Push” using Basic or Enhanced (Inspector + Snyk)
+-	Use VPC Endpoints or security groups with known sources only
+-	Compliance standard is what your business requires
+-	Amazon Organizations SCP – to manage ECS Task deletion, ECS creation, region lock, etc
+-	AWS CloudTrail is enabled and monitored to trigger alerts on malicious ECS behavior by an identity in AWS
+-	AWS Config Rules (as no GuardDuty (ECS) even in March 2023) is enabled in the account and region of ECS
+
+
+Amazon ECS – Security Best Practices – Application
+-	Access control – roles or IAM Users for ECS Clusters/Services/Tasks
+-	Most recent version of ECR Agent daemon on EC2
+-	Container Control Plane Configuration – root privileges, resource limitations, etc
+-	No secrets/passwords in ECS Task Definitions e.g. db password etc- Consider AWS Secret Manager
+-	No secrets/passwords in Containers – Consider AWS Secret Manager
+-	Only use Trusted Containers from ECR with no HIGH/CRITICAL vulnerabilities
+-	Limit ability to ssh into EC2 container to read only file systems – use APIs or GitOps to pull information for troubleshooting
+-	Amazon CloudWatch to monitor malicious ECW Configuration changes
+-	Only using Authorized Container Images (hopefully some image signing in the future e.g. sigstore)
+What AWS services can help achieve a website or web application hosted in AWS? 
+-	Route53
+-	Cloudfront
+-	API Gateway
+How does DNS Route53 work? 
+1.	DNS request: When a user enters a domain name in their web browser, it sends a DNS request to a DNS resolver server to translate the domain name into an IP address.
+
+2.	DNS resolver: The DNS resolver looks up the IP address associated with the domain name. If the resolver doesn't already have the IP address cached, it sends a query to the DNS root servers.
+
+3.	DNS root servers: The root servers respond with a list of TLD (Top-Level Domain) servers for the appropriate TLD.
+
+4.	TLD servers: The TLD servers respond with a list of authoritative name servers for the domain.
+
+5.	Authoritative name servers: The authoritative name servers respond with the IP address associated with the domain name.
+
+6.	Route 53: Once the DNS resolver has the IP address, it sends the request to the appropriate AWS resource, such as an EC2 instance or an S3 bucket.
+
+Amazon Route53 – Security Best Practices – AWS
+-	Integration with ACM (Amazon Certificate Manager) for TLS
+-	Compliance standard is what your business requires for a DNS provider
+-	Amazon Organizations SCP – to manage Route53 actions like creation, deletion, modification of production URIs, etc
+-	AWS CloudTrail is enabled and monitored to trigger alerts for malicious activities e.g. Associate VPC with Hosted Zone, Change Resource Record sets, register domain, etc.
+-	GuardDuty is enabled for monitoring suspicious DNS communications (ex. Crypto-mining) and automated for auto-remediation
+-	AWS Config rules is enabled in the account and region of ECS
+
+Amazon Route53 – Security Best Practices – Application
+-	Access Control – Roles or IAM users for making DNS changes in Amazon Route53
+-	Public vs Private hosted zones
+-	All Route53 records should point to an existing DNS, ELB, ALB, or AWS S3 – Watch out for dangling DNS domains
+-	Hosted Zone Configuration changes limited to small set of people
+-	enable Encryption in Transit using TLS/SSL certification (HTTPS Urls)
+-	Only use Trusted Domain Providers for requesting new DNS
+-	Set TTLs appropriately to afford to wait for a change to take effect 
+-	Ensure Root Domain Alias Record Points to ELB
+-	Develop process for continuously verifying if DNS and hosted zone are all current and valid
+
+```
