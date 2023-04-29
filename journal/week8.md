@@ -393,7 +393,7 @@ cp .env.example .env
 
 Then we again attempt a `cdk deploy`.
 
-![image](https://user-images.githubusercontent.com/119984652/235318472-7488d7c2-baad-45e5-9293-118edba7dbef.png
+![image](https://user-images.githubusercontent.com/119984652/235321983-d0f08bed-cba7-4ded-853d-68be1d7c8de6.png)
 
 When this does not work, Andrew lets us know that it could be due to the contents of the `process-images` folder not having any source code to pull from. I believe the real reason this did not work is due to the path we passed in the naming of the THUMBING_FUNCTION_PATH variable. We created a `process-images` folder, but the path does not match that. In following along with instruction however, we go to Andrew's branch of his repository where this is completed and grab the contents of that repo's `process-images` folder, beginning with `index.js`
 
