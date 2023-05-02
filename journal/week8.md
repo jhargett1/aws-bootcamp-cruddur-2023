@@ -1127,4 +1127,173 @@ Something still isn't correct however. The image is of `.jpg` format. Yet, in ou
 
 We download the image from S3 to see if the properties will tell us anything. The image downloads as a `.png` file. 
 
+We decide instead to remove the file extension in our code. From our `./aws/lambdas/process-images/index.js` file:
 
+```js
+const path = require('path');
+
+  filename = path.parse(srcKey).name
+  const dstKey = `${folderOutput}/${filename}.png`;
+```
+
+Per ChatGPT, this is what the code here is doing: 
+
+"We require `path` module from Node.js and assign it the variable `'path'`. We use the `path.parse()` method to extract the file name from `srcKey`, our input string. It returns an object that contains the different parts of the path, such as the file name, directory, and extension. The `.name` property of the returned object contains only the file name without the extension. 
+
+The extracted file name is then assigned to the variable filename.
+
+Finally, a new string `dstKey` is created by concatenating the `folderOutput` string, a forward slash "/", the filename variable, and the `.png` file extension. This new string represents the output file path where the file will be saved as a PNG image file."
+
+After these changes, we again `cdk deploy`. We again clear our S3 bucket with `./bin/serverless/clear`, but we manually clear the S3 bucket from the AWS console as well. We run `./bin/serverless/upload`. We move back over the CloudWatch in the AWS console. We view the latest log:
+
+![image](https://user-images.githubusercontent.com/119984652/235790356-81129ec0-6685-4b75-a95b-03870239d74d.png)
+
+Our image is being set correctly. We have instead decided however that we want the image to be a `.jpg`. We update the file extension in `./bin/serverless/clear`.
+
+```sh
+aws s3 rm "s3://assets.$DOMAIN_NAME/avatars/processed/data.jpg"
+```
+
+We move back over to `./aws/lambdas/process-images/s3-image-processing.js` and update the `ContentType` on our `uploadProcessedImage` function to `image/jpeg`.
+
+![image](https://user-images.githubusercontent.com/119984652/235792005-5771dacf-061f-4c1e-b661-1846a227b04c.png)
+
+We also update the `processimage` function:
+
+```js
+async function processImage(image,width,height){
+ const processedImage = await sharp(image)
+   .resize(width, height)
+   .jpeg()
+   .toBuffer();
+ return processedImage;
+ }
+```
+
+Above we set the output format of the image to `.jpeg` by calling the `jpeg()` method on the `sharp` instance. 
+
+We also update `./aws/lambdas/process-images/index.js`:
+
+```js
+const path = require('path');
+
+  filename = path.parse(srcKey).name
+  const dstKey = `${folderOutput}/${filename}.jpg`;
+```
+
+We again clear our S3 bucket, then `cdk deploy`. After this, we again run `./bin/serverless/upload`. When we reference our S3 bucket this time, we now have `data.jpg` in the `avatars/processed/` folder. 
+
+![image](https://user-images.githubusercontent.com/119984652/235797159-d3807a9f-c612-4dd4-b421-8435210e5b34.png)
+
+We now need to send data on the way out. This will be our notification. We must create an SNS Topic, an SNS subscription, and an S3 Event Notification to SNS. We navigate to our `thumbing-serverless-cdk-stack.ts` file and begin with our SNS topic. 
+
+We add the import statements for the SNS topic and subscriptions. 
+
+```js
+import * as sns from 'aws-cdk-lib/aws-sns';
+import * as subscriptions from 'aws-cdk-lib/aws-sns-subscriptions';
+```
+
+Then we create the topic. Then we create the SNS subscription. We also add the policy for SNS publishing. We attach the policy to the Lambda role as well. 
+
+```js
+const snsTopic = this.createSnsTopic(topicName)
+this.createSnsSubscription(snsTopic,webhookUrl)
+const snsPublishPolicy = this.createPolicySnSPublish(snsTopic.topicArn)
+
+lambda.addToRolePolicy(snsPublishPolicy);
+```
+
+We next create the SNS topic:
+
+```js
+createSnsTopic(topicName: string): sns.ITopic{
+  const logicalName = "ThumbingTopic";
+  const snsTopic = new sns.Topic(this, logicalName, {
+    topicName: topicName
+  });
+  return snsTopic;
+```
+
+And the SNS subscription:
+
+```js
+createSnsSubscription(snsTopic: sns.ITopic, webhookUrl: string): sns.Subscription {
+  const snsSubscription = snsTopic.addSubscription(
+    new subscriptions.UrlSubscription(webhookUrl)
+  )
+  return snsSubscription;
+}
+```
+
+We also create an S3 Event Notification to SNS:
+
+```js
+createS3NotifyToSns(prefix: string, snsTopic: sns.ITopic, bucket: s3.IBucket): void {
+  const destination = new s3n.SnsDestination(snsTopic)
+  bucket.addEventNotification(
+    s3.EventType.OBJECT_CREATED_PUT,
+    destination,
+    {prefix: prefix}
+  );
+}
+```
+
+We clean up our code, and organize it for easier reading.
+
+![image](https://user-images.githubusercontent.com/119984652/235801740-76b2faac-42b5-4fe3-8bbd-75cddb2562f5.png)
+
+We clear our S3 bucket, then `cdk deploy`. With the amount of code we just updated, we have an error.  
+
+![image](https://user-images.githubusercontent.com/119984652/235801176-88dafdbf-dbc7-418e-8cc3-7745d68fabe5.png)
+
+We check our `.env.example` file and see that is our problem. We update the `THUMBING_WEBHOOK_URL` variable to `"https://api.thejoshdev.com/webhooks/avatar"` then update our `.env` file the same. We again `cdk deploy`. We then head back over to AWS S3 and check our bucket properties to view the event notifications.
+
+![image](https://user-images.githubusercontent.com/119984652/235802254-93b263bb-c132-41bd-95a8-f71d4769e472.png)
+
+Our implementation is working thus far. We're now going to work on serving our images, i.e. assets over AWS Cloudfront. We move over to Cloudfront and click "Create a CloudFront distribution". We set an Origin Domain, Name, and set an Origin access control. Then we set Viewer protocol policy to "Redirect HTTP to HTTPS", and set the Cache policy to "CachingOptimized" and the Origin request policy to "CORS-CustomOrigin".  
+
+![image](https://user-images.githubusercontent.com/119984652/235804849-ced52aa2-cfce-4571-9548-aedb02137c1a.png)
+
+![image](https://user-images.githubusercontent.com/119984652/235804886-24902653-02f8-4347-abde-899f2d43bdd3.png)
+
+Moving on, we set the Response headers policy to "SimpleCORS", left real-time logs off to save on spend, and added our CNAME record, in my case `assets.thejoshdev.com` as the alternate domain name. Then we added our ACM certificate as the custom SSL certificate. Since my region is already `us-east-1`, I can use my ACM certificate here without having to make another. Other regions have to create one for the `us-east-1` region to use here. We added a description of "Serve Assets for Cruddur" so we know what this does, then created the distribution. 
+
+![image](https://user-images.githubusercontent.com/119984652/235805997-93d4bb4d-9a7c-46c1-8d15-2b5055c94142.png)
+
+Cloudfront generates out a distribution domain name when it completes. When we attempt to navigate to our endpoint, the page does not load. Andrew believes we need to add a new record to Route53 and that should resolve the issue. We navigate over to Route53 then go to Hosted Zones. We then create the record to point `assets.thejoshdev.com` to our CloudFront distribution domain. 
+
+![image](https://user-images.githubusercontent.com/119984652/235807001-0dfeda24-406a-4d6b-b337-029417d2978f.png)
+
+When we attempt to navigate here via the browser, it's giving us an error. As it turns out, when setting up the CloudFront distribution, we forgot to setup the bucket policy. We navigate over the S3 and do so now for our bucket. We select our assets bucket, then go to the Permissions tab and view the Bucket Policy, then select Edit. We provide the following JSON:
+
+```json
+{
+    "Version": "2008-10-17",
+    "Id": "PolicyForCloudFrontPrivateContent",
+    "Statement": [
+        {
+            "Sid": "AllowCloudFrontServicePrincipal",
+            "Effect": "Allow",
+            "Principal": {
+                "Service": "cloudfront.amazonaws.com"
+            },
+            "Action": "s3:GetObject",
+            "Resource": "arn:aws:s3:::assets.thejoshdev.com/*",
+            "Condition": {
+                "StringEquals": {
+                    "AWS:SourceArn": "arn:aws:cloudfront::99999999999999:distribution/ESEXETEF7X5THX"
+                }
+            }
+        }
+    ]
+}
+```
+
+We then test our endpoint again. It now loads without issue.
+
+![image](https://user-images.githubusercontent.com/119984652/235807908-d9ead115-d9e0-437b-8dec-2ed367b2dcec.png)
+
+We decide to lock down access to our original images, and in doing so, we've decided we're going to have another bucket created. This way, one bucket contains our uploaded images, the other will contain the processed ones. 
+
+We go back over to `thumbing-serverless-cdk-stack.ts` and 
