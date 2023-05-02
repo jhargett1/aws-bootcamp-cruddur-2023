@@ -722,5 +722,409 @@ We aren't certain that `cd`'ing into that directory will work or not because it'
 
 ![image](https://user-images.githubusercontent.com/119984652/235321726-eafb4dcb-4c66-4df6-be78-c744a5756ad8.png)
 
-The script completes without any issue. 
+The script completes without any issue. Moving on, Andrew says we need the SNS topic, but he said that we don't need it right away. What we do need is the input first. We're going to connect the S3 bucket to our Lambda. To do this, we're going to create an S3 Event notification to Lambda. In our `thumbing-serverless-cdk-stack.ts` file, we add the function call: 
+
+```ts
+this.createS3NotifyToLambda(folderInput,lambda,bucket);
+```
+
+Then add the function. This will create the `LambdaDestination`. We're passing in the Lambda, the S3 bucket, and the prefix. 
+
+```ts
+createS3NotifyToLambda(prefix: string, lambda: lambda.IFunction, bucket: s3.IBucket): void {
+  const destination = new s3n.LambdaDestination(lambda);
+  bucket.addEventNotification(
+   s3.EventType.OBJECT_CREATED_PUT,
+   destination,
+   {prefix: prefix} // folder to contain the original images 
+  )
+}
+```
+
+We find that we were missing the import for `s3n` so we added this as well.
+
+```ts
+import * as s3n from 'aws-cdk-lib/aws-s3-notifications';
+```
+
+We `cd` over to our `thumbing-serverless-cdk` directory and again perform a `cdk synth`. With the output, Andrew copies it from the terminal and creates a temporary file called `test.yml` so we can get a better view of it. We find that another Lambda is being created. Andrew said this is likely being created as an intermediary way to get back to the S3 bucket.
+
+![image](https://user-images.githubusercontent.com/119984652/235531853-294ef043-b544-4f70-b5b0-1770dfc7b2a5.png)
+
+We perform a `cdk deploy`. We go back over to CloudFormation in the AWS console and review the resources of our stack again. There's now a `BucketNotificationsHandler` added.
+
+![image](https://user-images.githubusercontent.com/119984652/235532997-275913b7-6b90-40ae-bd02-85a8aa43652b.png)
+
+We also are interested in the Lambda, so we navigate over there and review. There's now a trigger to our S3 bucket. 
+
+![image](https://user-images.githubusercontent.com/119984652/235533596-10452701-bf94-4c15-a20b-9d4183087a3f.png)
+
+Andrew finds that his S3 bucket is still named `cruddur-thumbs` which was a previous deployment name of the bucket. Since we've updated the bucket name since then, CDK is not tearing down the existing bucket and creating a new one with deployments as originally thought. So instead, we do a `cdk destroy`. This will tear down every resource created from our stack in reverse order it was created. 
+
+![image](https://user-images.githubusercontent.com/119984652/235534346-6244429a-16c8-4b17-89b0-6ea2d7ce62b7.png)
+
+Once our stack is destroyed, we again do a `cdk deploy`. We again check the Lambda created by our deployment. Andrew's bucket is again named `cruddur-thumbs`. After reviewing his AWS console and navigating to S3, Andrew believes he remembers the issue and goes back to his workspace. From there, he does a `env | grep THUMB` to check his env vars stored to GitPod, our workspace. 
+
+![image](https://user-images.githubusercontent.com/119984652/235535053-c3b4dcd3-065b-4210-b0bd-e27a58280a98.png)
+
+Andrew had variables stored for this. He unsets the variables, then removes them. Andrew again does a `cdk deploy`. He did not do a `cdk destroy` first this time on purpose. It was so we could see if the changesets in CDK will deploy the updated S3 bucket name since it's not deploying based on the env var set from our workspace. 
+
+This fixed the issue.
+
+![image](https://user-images.githubusercontent.com/119984652/235535442-5c310b30-084e-465a-adad-4d108b7f4c13.png)
+
+![image](https://user-images.githubusercontent.com/119984652/235535570-b400dc3f-712b-4a59-8596-32e01229c62e.png)
+
+We navigate to CloudFormation to double check and be sure. That confirms it fixed the issue.
+
+![image](https://user-images.githubusercontent.com/119984652/235535745-44d0090a-c859-4861-bb1a-814abc2722bc.png)
+
+While here, we review the changesets, in particular the latest one. You can see the bucket is being updated.
+
+![image](https://user-images.githubusercontent.com/119984652/235536163-8f82166c-6d5d-4827-8421-b0664c7fa7d1.png)
+
+We want to import our existing bucket into the stack. Back in our workspace, we again tear down our stack.
+
+```sh
+cdk destroy
+```
+
+We create a new function in our `thumbing-serverless-cdk-stack.ts` file.
+
+```ts
+  importBucket(bucketName: string): s3.IBucket {
+    const bucket = s3.Bucket.fromBucketName(this,"AssetsBucket",bucketName);
+    return bucket;
+  }
+```
+
+The `id` or logical name of the bucket is actually `AssetsBucket` or that makes more sense than `ThumbingBucket`. We update our existing code referencing `ThumbingBucket` to `AssetsBucket` as well. 
+
+Our `const bucket` we set previously must now be updated to reference importing the existing bucket. 
+
+```ts
+//const bucket = this.createBucket(bucketName);
+const bucket = this.importBucket(bucketName);
+```
+
+We manually create the bucket through S3 in the AWS console. 
+
+![image](https://user-images.githubusercontent.com/119984652/235537946-61690e1a-1668-4cb6-bfbb-16a29063b030.png)
+
+Back in our workspace, we do a `cdk deploy`. We again review CloudFormation and look at our resources. We see the bucket is added there. Just to make sure the bucket will persist even though the rest of the stack will be torn down, we do a `cdk destroy`. Once the stack is completely torn down, we again reference our S3 bucket, and it's still there. We select the bucket, then we create two new folders. `original/` and `processed/`. 
+
+![image](https://user-images.githubusercontent.com/119984652/235538750-f96c79cc-3baa-4422-bd24-9e3b3c25f50d.png)
+
+We save an image to work with, making sure it's dimensions are big enough for us to restructure the image during processing. We upload the image to our `oringal/` folder in S3. This should've triggered our Lambda function to process the image. We decide to check this, so we navigate over to Lambda in the AWS console. The Lambda does not exist. We remember that we left our stack torn down. Instead of manually uploading the image, we decide to write some CLI commands, since we're going to be working with this for a bit. 
+
+We do a `cdk deploy`. With our stack deployed, we move onto the scripts we were going to create. From our `./bin/serverless/` directory, we create `upload`, which is referencing an env var `$DOMAIN_NAME` we've setup locally in our workspace. 
+
+```sh
+#! /usr/bin/bash
+
+ABS_PATH=$(readlink -f "$0")
+SERVERLESS_PATH=$(dirname $ABS_PATH)
+DATA_FILE_PATH="$SERVERLESS_PATH/files/data.jpg"
+
+aws s3 cp "$DATA_FILE_PATH" "s3://assets.$DOMAIN_NAME"
+```
+
+We create a new folder in our `./bin/serverless` directory named `Files` and upload our image to it.
+
+![image](https://user-images.githubusercontent.com/119984652/235540550-10a6c2d9-8e82-4195-9ba7-d6fe7e15b4bf.png)
+
+
+We chmod `./bin/serverless/upload` to make it executable. Then we run the file to test it out. 
+
+```sh
+./bin/serverless/upload
+```
+
+We navigate back over to S3 in AWS to check our bucket and see if the upload worked. It did, we just didn't specify the correct folder.
+
+![image](https://user-images.githubusercontent.com/119984652/235541262-c06355dc-5a89-42bd-9fd4-cac567e09909.png)
+
+We delete the image from our bucket, then we go back to our workspace to review the path. 
+
+```sh
+#! /usr/bin/bash
+
+ABS_PATH=$(readlink -f "$0")
+SERVERLESS_PATH=$(dirname $ABS_PATH)
+DATA_FILE_PATH="$SERVERLESS_PATH/files/data.jpg"
+
+aws s3 cp "$DATA_FILE_PATH" "s3://assets.$DOMAIN_NAME/avatar/original"
+```
+
+We realize the folders in S3 are set to be top level instead of inside of a folder, so we delete them from the S3 bucket. We also decide to rename the main folder, as it will contain multiple avatars, not just one. We update our `./thumbing-serverless-cdk/.env.example` file as it holds our env vars set for this. 
+
+```.env
+THUMBING_S3_INPUT="avatars/original"
+THUMBING_S3_OUTPUT="avatars/processed"
+```
+
+We update the same in our `.env` file as well. We also update the path in our `upload` script. 
+
+```sh
+aws s3 cp "$DATA_FILE_PATH" "s3://assets.$DOMAIN_NAME/avatars/original"
+```
+
+We do another `cdk deploy`. Then, we create another script. This one will be to remove the image. We create `./bin/serverless/clear`. 
+
+```sh
+#! /usr/bin/bash
+
+ABS_PATH=$(readlink -f "$0")
+SERVERLESS_PATH=$(dirname $ABS_PATH)
+DATA_FILE_PATH="$SERVERLESS_PATH/files/data.jpg"
+
+aws s3 rm "s3://assets.$DOMAIN_NAME/avatars/original/data.jpg"
+aws s3 rm "s3://assets.$DOMAIN_NAME/avatars/processed/data.png"
+```
+
+We run our `upload` file.
+
+```sh
+./bin/serverless/upload
+```
+
+We refresh S3 from AWS. We now have a file named `original`.
+
+![image](https://user-images.githubusercontent.com/119984652/235546930-76c35364-d317-4eb3-be60-1a0bf33563e5.png)
+
+We next check S3 for our event notification. It's there, listed as event type: `put`. 
+
+![image](https://user-images.githubusercontent.com/119984652/235547127-8222f903-26c0-4779-a7ae-0c70eb1d73e2.png)
+
+We next check our S3 buckets to see if the image processed. It did not, so we review the Lambda. We review the Cloudwatch logs for the Lambda and find that there aren't any. Andrew believes this is because we're doing a `put` and not a `post`. We go back to `thumbing-serverless-cdk-stack.ts` and update our function. 
+
+```ts
+  createS3NotifyToLambda(prefix: string, lambda: lambda.IFunction, bucket: s3.IBucket): void {
+    const destination = new s3n.LambdaDestination(lambda);
+    bucket.addEventNotification(
+      s3.EventType.OBJECT_CREATED_POST,
+      destination//,
+      //{prefix: prefix} // folder to contain the original images
+    )
+  }
+```
+
+Again, we re-deploy with a `cdk deploy`. We then use our `clear` script created earlier. 
+
+```sh
+./bin/serverless/clear
+```
+
+When we check to see if this completed successfully in S3, that's when it's noticed that `avatars/original` generated a file and not an image in our bucket. We manually delete the file, then go back to our `./bin/serverless/upload` script and edit the file path. 
+
+```sh
+#! /usr/bin/bash
+
+ABS_PATH=$(readlink -f "$0")
+SERVERLESS_PATH=$(dirname $ABS_PATH)
+DATA_FILE_PATH="$SERVERLESS_PATH/files/data.jpg"
+
+aws s3 cp "$DATA_FILE_PATH" "s3://assets.$DOMAIN_NAME/avatars/original/data.jpg"
+```
+
+At this point, Andrew believes the Lambda would've worked with a `put` as well as a `post`. The difference is going to be the event data returned. We run our `upload` script again.
+
+```sh
+./bin/serverless/upload
+```
+
+Back in S3, we take a look at our bucket again.
+
+![image](https://user-images.githubusercontent.com/119984652/235548412-75f3f128-a024-4b06-9cef-a015d568204e.png)
+
+Looks like our `original` folder created, but our Lambda didn't run to process the image, so there's no `processed` folder. No Cloudwatch logs for the Lambda either. Andrew thinks this is likely due to that event data being returned as he mentioned earlier, so we change our function back to a `put`. 
+
+```ts
+  createS3NotifyToLambda(prefix: string, lambda: lambda.IFunction, bucket: s3.IBucket): void {
+    const destination = new s3n.LambdaDestination(lambda);
+    bucket.addEventNotification(
+      s3.EventType.OBJECT_CREATED_PUT,
+      destination//,
+      //{prefix: prefix} // folder to contain the original images
+    )
+  }
+```
+
+We clear our S3 bucket.
+
+```sh
+./bin/serverless/clear
+```
+
+Then re-deploy.
+
+```sh
+cdk deploy
+```
+
+Then we attempt to upload an image again. 
+
+```sh
+./bin/serverless/upload
+```
+
+Back in S3, again, our `original/` folder is created, but not `processed/`. Also there's still no Cloudwatch logs for the Lambda. We decide to test and see if just the Lambda itself works. In Lambda from the AWS console, we go to Test. We already have `example.json` created earlier with some test data we can add. We paste `example.json` into the Event JSON field:
+
+```json
+{
+    "Records": [
+      {
+        "eventVersion": "2.0",
+        "eventSource": "aws:s3",
+        "awsRegion": "us-east-1",
+        "eventTime": "1970-01-01T00:00:00.000Z",
+        "eventName": "ObjectCreated:Put",
+        "userIdentity": {
+          "principalId": "EXAMPLE"
+        },
+        "requestParameters": {
+          "sourceIPAddress": "127.0.0.1"
+        },
+        "responseElements": {
+          "x-amz-request-id": "EXAMPLE123456789",
+          "x-amz-id-2": "EXAMPLE123/5678abcdefghijklambdaisawesome/mnopqrstuvwxyzABCDEFGH"
+        },
+        "s3": {
+          "s3SchemaVersion": "1.0",
+          "configurationId": "testConfigRule",
+          "bucket": {
+            "name": "assets.thejoshdev.com",
+            "ownerIdentity": {
+              "principalId": "EXAMPLE"
+            },
+            "arn": "arn:aws:s3:::assets.thejoshdev.com"
+          },
+          "object": {
+            "key": "avatars/original/data.jpg",
+            "size": 1024,
+            "eTag": "0123456789abcdef0123456789abcdef",
+            "sequencer": "0A1B2C3D4E5F678901"
+          }
+        }
+      }
+    ]
+  }
+```
+
+We hit test, and get an "Execution result: failed".
+
+![image](https://user-images.githubusercontent.com/119984652/235549507-b5d4d06d-9a74-4bd2-a1b6-5414914c94fa.png)
+
+We think it might be a problem with our data. So we try a template offered by AWS of `s3-put`. This test fails as well. 
+
+![image](https://user-images.githubusercontent.com/119984652/235549656-496cede4-1fc4-48f8-931e-6b3731947f1a.png)
+
+In reviewing our permissions for the Lambda, we realize it might not have permissions to the S3 bucket. We navigate over to `thumbing-serverless-cdk-stack.ts` and create a policy for bucket access.
+
+```ts
+    const s3ReadWritePolicy = this.createPolicyBucketAccess(uploadsBucket.bucketArn)
+```
+
+We also create a function:
+
+```ts
+  createPolicyBucketAccess(bucketArn: string){
+    const s3ReadWritePolicy = new iam.PolicyStatement({
+      actions: [
+        's3:GetObject',
+        's3:PutObject',
+      ],
+      resources: [
+        `${bucketArn}/*`,
+      ]
+    });
+    return s3ReadWritePolicy;
+  }
+```
+
+We also need to import `iam` now. 
+
+```ts
+import * as iam from 'aws-cdk-lib/aws-iam';
+```
+
+Next we must attach the policy to the Lambda. 
+
+```ts
+lambda.addToRolePolicy(s3ReadWritePolicy);
+```
+
+Again, we deploy.
+
+```sh
+cdk deploy
+```
+
+Again we go back to our Lambda and check the permissions. It looks like this might resolve our issue with uploads. We now have S3 permissions for the Lambda.
+
+![image](https://user-images.githubusercontent.com/119984652/235550740-13a82ae5-b007-47b7-87f5-dc7bdc0df2c2.png)
+
+We make sure our bucket is empty.
+
+```sh
+./bin/serverless/clear
+```
+
+Then we again attempt to upload an image.
+
+```sh
+./bin/serverless/upload
+```
+
+We check our S3 bucket and we again have our `original/` folder, but no `processed/`. There's also now a Cloudwatch log.
+
+![image](https://user-images.githubusercontent.com/119984652/235551195-9964073c-4a25-4867-bfd1-85b231795c50.png)
+
+This Cloudwatch log is from the Test code from our Lambda. We run the `s3-put` test code again and it fails again, but in reviewing the Cloudwatch logs, we may have found something. This is from the Cloudwatch log:
+
+![image](https://user-images.githubusercontent.com/119984652/235552444-fca3cd7a-0640-4362-9484-9558e736267d.png)
+
+In our `./aws/lambdas/process-images/index.js` file, one of our `const`'s: 
+
+![image](https://user-images.githubusercontent.com/119984652/235552587-3c46101c-f5d0-4a5d-80c9-be3418e291a2.png)
+
+That leads us to review the env vars set for our Lambda. 
+
+![image](https://user-images.githubusercontent.com/119984652/235552807-89ad32fa-ab9f-42b9-b36e-587eeba4b17b.png)
+
+In comparing the env vars with what's being passed as the `srcKey`, you can see that we don't need the beginning `"/"`. 
+
+We go back to our `.env.example` env vars to remove it. 
+
+```.env
+THUMBING_S3_FOLDER_INPUT="avatars/original"
+THUMBING_S3_FOLDER_OUTPUT="avatars/processed"
+```
+
+We update our `.env` file as well. We again `cdk deploy`. Then, we run `./bin/serverless/clear` to clear the S3 bucket, and `./bin/serverless/upload` to upload an image again. We check S3 and find the same situation as before. `original/` folder is there. However, we do have a new Cloudwatch log.
+
+![image](https://user-images.githubusercontent.com/119984652/235553362-f7f9f4c9-4f2c-4861-8563-f10d0cf168f8.png)
+
+We go back to our code to find the issue. In `./aws/lambdas/process-images/s3-image-processing.js`, we find `client.send`. 
+
+![image](https://user-images.githubusercontent.com/119984652/235553558-41df221a-7d3d-41e5-8c0e-078f2adb5071.png)
+
+The error in the Cloudwatch log indicated we're missing the client, so we go back to In `./aws/lambdas/process-images/index.js` and find that we need to add it to `uploadProcessedimage`. 
+
+```js
+  const originalImage = await getOriginalImage(client,srcBucket,srcKey)
+  const processedImage = await processImage(originalImage,width,height)
+  await uploadProcessedImage(client,dstBucket,dstKey,processedImage)
+```
+
+We again `cdk deploy`. Then, `./bin/serverless/clear` and `./bin/serverless/upload`. Next, we check again through S3. We now have a `processed/` folder!
+
+![image](https://user-images.githubusercontent.com/119984652/235554083-4ec6d67f-d3b4-4906-a7ec-5891ddeb370f.png)
+
+Something still isn't correct however. The image is of `.jpg` format. Yet, in our `s3-iamge-processing.js` file, it's supposed to be `.png`. 
+
+![image](https://user-images.githubusercontent.com/119984652/235554242-baa13cc5-a2e9-4296-a2da-6060989dca78.png)
+
+We download the image from S3 to see if the properties will tell us anything. The image downloads as a `.png` file. 
+
 
