@@ -1296,4 +1296,285 @@ We then test our endpoint again. It now loads without issue.
 
 We decide to lock down access to our original images, and in doing so, we've decided we're going to have another bucket created. This way, one bucket contains our uploaded images, the other will contain the processed ones. 
 
-We go back over to `thumbing-serverless-cdk-stack.ts` and 
+We add a edit our variables by adding one and altering one in our `.env.example` and `.env` files: 
+
+```.env
+UPLOADS_BUCKET_NAME="thejoshdev-uploaded-avatars"
+ASSETS_BUCKET_NAME="assets.thejoshdev.com"
+```
+
+We go back over to `thumbing-serverless-cdk-stack.ts` and add code to create new buckets:
+
+```ts
+    // The code that defines your stack goes here
+    const uploadsBucketName: string = process.env.UPLOADS_BUCKET_NAME as string;
+    const assetsBucketName: string = process.env.ASSETS_BUCKET_NAME as string;
+    
+    const uploadsBucket = this.createBucket(uploadsBucketName);
+    const assetsBucket = this.importBucket(assetsBucketName);
+```
+
+We update our Lambda to include the new buckets. 
+
+```ts
+    // create a lambda
+    const lambda = this.createLambda(
+      functionPath, 
+      uploadsBucketName, 
+      assetsBucketName, 
+      folderInput, 
+      folderOutput
+    );
+```
+
+Then our S3 Event notifications.
+
+```ts
+    // add our s3 event notifications
+    this.createS3NotifyToLambda(folderInput,lambda,uploadsBucket)
+    this.createS3NotifyToSns(folderOutput,snsTopic,assetsBucket)
+```
+
+Next we update our policy, and add another.
+
+```ts
+    // create policies
+    const s3UploadsReadWritePolicy = this.createPolicyBucketAccess(uploadsBucket.bucketArn)
+    const s3AssetsReadWritePolicy = this.createPolicyBucketAccess(assetsBucket.bucketArn)
+```
+
+We update what's being passed to our `createLambda` function.
+
+```ts
+  createLambda(functionPath: string, uploadsBucketName: string, assetsBucketName: string, folderInput: string, folderOutput: string): lambda.IFunction {
+    const lambdaFunction = new lambda.Function(this, 'ThumbLambda', {
+      runtime: lambda.Runtime.NODEJS_18_X,
+      handler: 'index.handler',
+      code: lambda.Code.fromAsset(functionPath),
+      environment: {
+        DEST_BUCKET_NAME: assetsBucketName,
+        FOLDER_INPUT: folderInput,
+        FOLDER_OUTPUT: folderOutput,
+        PROCESS_WIDTH: '512',
+        PROCESS_HEIGHT: '512'
+      }
+    });
+    return lambdaFunction;
+  }
+```
+
+Then our `createBucket` and `importBucket` functions.
+
+```ts
+  createBucket(bucketName: string): s3.IBucket {
+    const bucket = new s3.Bucket(this, 'UploadsBucket', {
+      bucketName: bucketName,
+      removalPolicy: cdk.RemovalPolicy.DESTROY
+    });
+    return bucket;
+  }
+
+  importBucket(bucketName: string): s3.IBucket {
+    const bucket = s3.Bucket.fromBucketName(this,"AssetsBucket",bucketName);
+    return bucket;
+  }
+```
+
+With these changes, we again do a `cdk deploy`. In discussing our `./bin/serverless` directory, Andrew mentions he'd like to rename it to something a little more in tune with what the folder is for. We update it to `./bin/avatar` instead. With the new bucket names, we need to go update one of our scripts. The `./bin/avatars/upload` script.
+
+```sh
+#! /usr/bin/bash
+
+ABS_PATH=$(readlink -f "$0")
+SERVERLESS_PATH=$(dirname $ABS_PATH)
+DATA_FILE_PATH="$SERVERLESS_PATH/files/data.jpg"
+
+aws s3 rm "s3://thejoshdev-uploaded-avatars/avatars/original/data.jpg"
+aws s3 rm "s3://assets.$DOMAIN_NAME/avatars/processed/data.jng"
+```
+
+Then we must update our `./bin/avatar/upload` file as well:
+
+```sh
+#! /usr/bin/bash
+
+ABS_PATH=$(readlink -f "$0")
+SERVERLESS_PATH=$(dirname $ABS_PATH)
+DATA_FILE_PATH="$SERVERLESS_PATH/files/data.jpg"
+
+aws s3 cp "$DATA_FILE_PATH" "s3://thejoshdev-uploaded-avatars/avatars/original/data.jpg"
+```
+
+With the latest deployment complete, we head over to S3 in the AWS Console and see if our buckets are created. Looks like they are.
+
+![image](https://user-images.githubusercontent.com/119984652/236051725-c7dc17f0-31ab-4a21-a81d-f5dad4b1e23d.png)
+
+We remove all images from our buckets manually through the UI. Next we go back over to our workspace and run our script `./bin/avatar/upload`. We then head back over to S3 and view our `assets` bucket. It appears to have processed the image.
+
+![image](https://user-images.githubusercontent.com/119984652/236053109-bca10966-a7a9-40b2-8c64-43b976347ce3.png)
+
+When we go over to our `thejoshdev-uploaded-avatars` bucket, we see where the original image resides.
+
+![image](https://user-images.githubusercontent.com/119984652/236053325-97e216d6-3b68-40a7-b8af-d72b51080eef.png)
+
+It's decided we'd like to change the folder structure for these buckets, so we update our variables in the `.env` and `.env.example` files:
+
+```.env
+THUMBING_S3_FOLDER_INPUT=""
+THUMBING_S3_FOLDER_OUTPUT="avatars"
+```
+
+We again empty the contents of our S3 buckets through the AWS console. Then we again `cdk deploy`. This fails, giving us an error about not specifying a prefix in the variables we passed above.
+
+![image](https://user-images.githubusercontent.com/119984652/236054605-7b06fd2d-8ef4-438f-ba7a-2fbb34b0da6a.png)
+
+To circumvent this, we comment out the `prefix` from our `createS3NotifyToLambda` function in our `thumbing-serverless-cdk-stack.ts` file. 
+
+```ts
+  createS3NotifyToLambda(prefix: string, lambda: lambda.IFunction, bucket: s3.IBucket): void {
+    const destination = new s3n.LambdaDestination(lambda);
+    bucket.addEventNotification(
+      s3.EventType.OBJECT_CREATED_PUT,
+      destination//,
+      //{prefix: prefix} // folder to contain the original images
+    )
+  }
+```
+
+We again `cdk deploy`. We again edit the folders being created by editing our `./bin/avatar/upload` script.
+
+```sh
+#! /usr/bin/bash
+
+ABS_PATH=$(readlink -f "$0")
+SERVERLESS_PATH=$(dirname $ABS_PATH)
+DATA_FILE_PATH="$SERVERLESS_PATH/files/data.jpg"
+
+aws s3 cp "$DATA_FILE_PATH" "s3://thejoshdev-uploaded-avatars/data.jpg"
+```
+
+We execute the script: `./bin/avatar/upload` then check our buckets through S3 again. 
+
+![image](https://user-images.githubusercontent.com/119984652/236056156-3078ff77-7b19-48d1-9f57-72a5697327e3.png)
+
+Our image uploaded as it was suppose to. Now that we've worked out uploading to our S3 buckets, we must work on implementation. Moving back to our workspace, we begin on this by making sure we're logged into ECR first. 
+
+```sh
+./bin/ecr/login
+```
+
+Next we do a Docker Compose Up. Then, `./bin/db/setup`, `./bin/ddb/schema-load`, and `./bin/ddb/seed` to provide some data to our web app. We access our web app, then login and head over the the Profile page to gather an idea of what we're looking at. We want to return some user activity on the Profile page. Over in our workspace, we create a new query named `backend-flask/db/sql/users/show.sql`. 
+
+```sql
+SELECT
+  users.uuid,
+  users.handle,
+  users.display_name,
+  (SELECT COALESCE(array_to_json(array_agg(row_to_json(array_row))),'[]'::json) FROM (
+    SELECT
+      activities.uuid,
+      users.display_name,
+      users.handle,
+      activities.message,
+      activities.created_at,
+      activities.expires_at
+    FROM public.activities  
+    WHERE 
+      activities.user_uuid = users.uuid
+    ORDER BY activities.created_at DESC
+    LIMIT 40    
+  ) array_row) as activities
+FROM public.users
+WHERE
+  users.handle = %(handle)s    
+```
+
+We begin removing our mock data from our code. We start with `./backend-flask/services/user_activities.py`. 
+
+```py
+class UserActivities:
+  def run(user_handle):
+    try:
+      model = {
+        'errors': None,
+        'data': None
+      }
+
+      if user_handle == None or len(user_handle) < 1:
+        model['errors'] = ['blank_user_handle']
+      else:
+        sql = db.template('users','show')
+        results = db.query_array_json(sql)
+        model['data'] = results
+      finally:
+      return model
+```
+
+With the help of ChatGPT, I've broken down what we're doing above.
+
+We start with a dictionary named "model" with two keys: "errors" and "data", both initially set to None. 
+
+```py
+    try:
+      model = {
+        'errors': None,
+        'data': None
+      }
+```
+
+It checks if the "user_handle" parameter is None or has a length less than 1. If either condition is true, it sets the "errors" key in the "model" dictionary to a list containing the string 'blank_user_handle'.
+
+```py
+      if user_handle == None or len(user_handle) < 1:
+        model['errors'] = ['blank_user_handle']
+```
+
+Otherwise, it retrieves a SQL query from the database object called "db" using the "template" method. The query is expected to retrieve user activities from our database table `users` using the template we just created, `show`. 
+
+```py
+      else:
+        sql = db.template('users','show')
+```
+
+The query is executed using the "query_array_json" method of the "db" object, which retrieves the query results as a JSON array.
+
+```py
+        results = db.query_array_json(sql)
+```
+
+The query results are assigned to the "data" key in the "model" dictionary. Finally, the "model" dictionary is returned, which contains either the query results or an error message if the "user_handle" parameter was None or had a length less than 1.
+
+```py
+        model['data'] = results
+      finally:
+        return model      
+```
+
+We do another Docker compose up, then view the front end of our app. We not returning data. Since we did a `docker compose up` from our terminal, we can see what's wrong there.
+
+![image](https://user-images.githubusercontent.com/119984652/236067378-c977dc24-eb94-4177-90ea-b942d37cddb2.png)
+
+Andrew believes that's because we're actually returning an object, not an array. We update that in our `else` statement.
+
+```py
+      else:
+        sql = db.template('users','show')
+        results = db.query_object_json(sql)
+        model['data'] = results
+```
+
+We refresh our web app, but there's no change in the error. We can see our query from the terminal:
+
+![image](https://user-images.githubusercontent.com/119984652/236068553-c225e960-cfc0-44f3-a94c-c4db6bf1503f.png)
+
+Nothing is passing along, and Andrew mentions nothing is matching as well. Since nothing is passing along, we comment out our `try`, update our indentation, and add a couple of `print`'s to see what is returning and where.
+
+![image](https://user-images.githubusercontent.com/119984652/236069326-316877f9-8f95-4648-8094-225777fc5da6.png)
+
+We refresh our web app and immediately get an error stating `NameError: name 'db' is not defined`.  That's because we need to import it.
+
+```py
+from lib.db import db
+```
+
+After a few more syntax cleanups, we are now returning data in our Profile page, but our UI isn't built to implement it just yet. 
