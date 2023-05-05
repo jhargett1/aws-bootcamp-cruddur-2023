@@ -2079,3 +2079,366 @@ We add more styling to `ProfileHeading.css` to make our Crud Count visible.
 
 ![image](https://user-images.githubusercontent.com/119984652/236355879-836e4989-5501-49ae-9657-1ffd8b83cc2e.png)
 
+At the start of the next instructional video, Andrew explains that he's found a solution to a constant problem we've had since the beginning of bootcamp. Consistantly when we update code and refresh our web app, additional spaces need to be entered for the new code to be pushed to the logs. We go to our `./backend-flask/Dockerfile` and add the following:
+
+```Dockerfile
+ENV PYTHONUNBUFFERED=1
+```
+
+A little extra insight via ChatGPT:
+
+"The `ENV PYTHONUNBUFFERED=1` statement is used in a Dockerfile to set an environment variable. Specifically, it sets the `PYTHONUNBUFFERED` variable to the value of 1.
+
+In Python, when the standard output (stdout) or standard error (stderr) streams are used, the output may be buffered, meaning that the output is held in a buffer before being written to the console. This can lead to unexpected behavior when running Python scripts in a containerized environment, where logs and output may not appear immediately.
+
+Setting `PYTHONUNBUFFERED` to 1 disables output buffering for Python, which ensures that output is immediately written to the console. This can be useful for logging and debugging purposes."
+
+We make sure we're signed into ECR, then we attempt a Docker compose up. 
+
+![image](https://user-images.githubusercontent.com/119984652/236572220-dcf33d88-d78d-4d74-a6ca-3ac6f4504f6f.png)
+
+This is happening because the script `generate-env` is not running correctly for our backend from our `.gitpod.yml` file. We view the file. While viewing, we add a new section for Docker, so we can be logged into ECR automatically when launching our workspace. 
+
+![image](https://user-images.githubusercontent.com/119984652/236572804-a9b5e79f-bc61-414a-a124-13a223fa3e40.png)
+
+We also remove the `source` from the path to run the `generate-env` script.
+
+```yml
+  - name: flask 
+    command: |
+      "$THEIA_WORKSPACE_ROOT/bin/backend/generate-env"
+```
+
+To test this, we commit our changes, then quit and relaunch our workspace. The change failed.
+
+![image](https://user-images.githubusercontent.com/119984652/236573173-23b62b28-4c0e-4075-b314-1835488ccfe4.png)
+
+For the sake of moving onward, for now, we remove the scripts from our `.gitpod.yml` file. We also remove the section for Docker we added above. Instead, we go back to our `/bin/bootstrap` file. Maybe we can get this working correctly for logging into ECR. 
+
+```sh
+#! /usr/bin/bash
+set -e # stop if it fails at any point
+
+CYAN='\033[1;36m'
+NO_COLOR='\033[0m'
+LABEL="bootstrap"
+printf "${CYAN}====== ${LABEL}${NO_COLOR}\n"
+
+ABS_PATH=$(readlink -f "$0")
+BIN_DIR=$(dirname $ABS_PATH)
+
+source "$BIN_DIR/ecr/login"
+source "$BIN_DIR/backend/generate-env"
+source "$BIN_DIR/frontend/generate-env"
+```
+
+When we run the script, it logs us into ECR and generates a `backend-flask.env` and a `frontend-react-js.env` file. We then decide to try and get a script running to do what we originally set out `./bin/bootstrap` to do. We create `./bin/prepare`. 
+
+```sh
+#! /usr/bin/bash
+set -e # stop if it fails at any point
+
+CYAN='\033[1;36m'
+NO_COLOR='\033[0m'
+LABEL="prepare"
+printf "${CYAN}====== ${LABEL}${NO_COLOR}\n"
+
+ABS_PATH=$(readlink -f "$0")
+BIN_PATH=$(dirname $ABS_PATH)
+DB_PATH="$BIN_PATH/db"
+DDB_PATH="$BIN_PATH/ddb"
+
+source "$DB_PATH/create"
+source "$DB_PATH/schema-load"
+source "$DB_PATH/seed"
+python "$DB_PATH/update_cognito_user_ids"
+python "$DDB_PATH/schema-load"
+python "$DDB_PATH/seed"
+```
+
+We make the file executable, then do a Docker compose up. With our environment running, we check the ports and see the backend is not running. We view the logs of the backend. 
+
+![image](https://user-images.githubusercontent.com/119984652/236574903-2a87c991-8910-4ec9-8c31-c15ef1198460.png)
+
+When we added `ENV PYTHONUNBUFFERED=1` to our Dockerfile earlier, we forgot to remove the `-u` from our Docker `CMD`. We do so now. 
+
+```Dockerfile
+CMD [ "python3", "-m" , "flask", "run", "--host=0.0.0.0", "--port=4567", "--debug"]
+```
+
+We compose down our environment, then compose up again. We check the ports again and everything is now running. We then run our new script `./bin/prepare`. This script does not work, so we manually run the scripts to setup our tables and seed data to our web app locally. With our app now getting data, we login. We navigate over to our Profile page. 
+
+![image](https://user-images.githubusercontent.com/119984652/236577465-e027e749-0c42-40c8-8554-909ec197828a.png)
+
+When we click the `Edit Profile` button, nothing happens right now. We begin implenting some new code. We create a new file named `./frontend-react-js/jsconfig.json`. 
+
+```json
+{
+    "compilerOptions": {
+      "baseUrl": "src"
+    },
+    "include": ["src"]
+  }
+```
+
+The `compilerOptions` object contains options that affect how code is compiled into JavaScript. In this case, the option specified is `baseUrl`, which sets the base directory for resolving non-relative module names. Specifically, it sets the base URL for resolving module specifiers in import statements to the `src` directory.
+
+For example, in our `HomeFeedPage.js` file, we can now alter our import statements from this:
+
+![image](https://user-images.githubusercontent.com/119984652/236578762-dfcb52e4-ee70-4b80-b756-dafc6741d6b3.png)
+
+To this:
+
+```js
+import DesktopNavigation  from 'components/DesktopNavigation';
+import DesktopSidebar     from 'components/DesktopSidebar';
+import ActivityFeed from 'components/ActivityFeed';
+import ActivityForm from 'components/ActivityForm';
+import ReplyForm from 'components/ReplyForm';
+import {checkAuth, getAccessToken} from 'lib/CheckAuth';
+```
+
+Andrew further explains its powerful due to this fact how we can move our files around anywhere in our directories as the pathing is absolute to the import. 
+
+Moving onward, we create another new component, `./frontend-react-js/src/components/ProfileForm.js`
+
+```js
+import './ProfileForm.css';
+import React from "react";
+import process from 'process';
+import {getAccessToken} from 'lib/CheckAuth';
+
+export default function ProfileForm(props) {
+  const [bio, setBio] = React.useState(0);
+  const [displayName, setDisplayName] = React.useState(0);
+
+  React.useEffect(()=>{
+    console.log('useEffects',props)
+    setBio(props.profile.bio);
+    setDisplayName(props.profile.display_name);
+  }, [props.profile])
+
+  const onsubmit = async (event) => {
+    event.preventDefault();
+    try {
+      const backend_url = `${process.env.REACT_APP_BACKEND_URL}/api/profile/update`
+      await getAccessToken()
+      const access_token = localStorage.getItem("access_token")
+      const res = await fetch(backend_url, {
+        method: "POST",
+        headers: {
+          'Authorization': `Bearer ${access_token}`,
+          'Accept': 'application/json',
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          bio: bio,
+          display_name: displayName
+        }),
+      });
+      let data = await res.json();
+      if (res.status === 200) {
+        setBio(null)
+        setDisplayName(null)
+        props.setPopped(false)
+      } else {
+        console.log(res)
+      }
+    } catch (err) {
+      console.log(err);
+    }
+  }
+
+  const bio_onchange = (event) => {
+    setBio(event.target.value);
+  }
+
+  const display_name_onchange = (event) => {
+    setDisplayName(event.target.value);
+  }
+
+  const close = (event)=> {
+    console.log('close',event.target)
+    if (event.target.classList.contains("profile_popup")) {
+      props.setPopped(false)
+    }
+  }
+
+  if (props.popped === true) {
+    return (
+      <div className="popup_form_wrap profile_popup" onClick={close}>
+        <form 
+          className='profile_form popup_form'
+          onSubmit={onsubmit}
+        >
+          <div class="popup_heading">
+            <div class="popup_title">Edit Profile</div>
+            <div className='submit'>
+              <button type='submit'>Save</button>
+            </div>
+          </div>
+          <div className="popup_content">
+            <div className="field display_name">
+              <label>Display Name</label>
+              <input
+                type="text"
+                placeholder="Display Name"
+                value={displayName}
+                onChange={display_name_onchange} 
+              />
+            </div>
+            <div className="field bio">
+              <label>Bio</label>
+              <textarea
+                placeholder="Bio"
+                value={bio}
+                onChange={bio_onchange} 
+              />
+            </div>
+          </div>
+        </form>
+      </div>
+    );
+  }
+}
+```
+
+"The component takes in props as a parameter, which includes `props.popped`, a boolean indicating whether the popup is currently shown or not, and `props.profile`, an object containing the current user profile information. We're using React hooks such as `useState` and `useEffect` to manage state and perform side effects. `useState` is used to manage the state of `bio` and `displayName`, which hold the user's bio and display name respectively. `useEffect` is used to update the `bio` and `displayName` states whenever the `props.profile` object changes. The component also defines several functions that handle events such as form submission and input change. When the form is submitted, it sends a POST request to the backend API to update the user's profile information. When the input fields are changed, it updates the corresponding states. Finally, the component returns the popup form if `props.popped` is true, and null otherwise." - thank you ChatGPT.
+
+We then get to work on the `frontend-react-js/src/components/ProfileForm.css` file. 
+
+```css
+form.profile_form input[type='text'],
+form.profile_form textarea {
+  font-family: Arial, Helvetica, sans-serif;
+  font-size: 16px;
+  border-radius: 4px;
+  border: none;
+  outline: none;
+  display: block;
+  outline: none;
+  resize: none;
+  width: 100%;
+  padding: 16px;
+  border: solid 1px var(--field-border);
+  background: var(--field-bg);
+  color: #fff;
+}
+
+.profile_popup .popup_content {
+  padding: 16px;
+}
+
+form.profile_form .field.display_name {
+  margin-bottom: 24px;
+}
+
+form.profile_form label {
+  color: rgba(255,255,255,0.8);
+  padding-bottom: 4px;
+  display: block;
+}
+
+form.profile_form textarea {
+  height: 140px;
+}
+
+form.profile_form input[type='text']:hover,
+form.profile_form textarea:focus {
+  border: solid 1px var(--field-border-focus)
+}
+
+.profile_popup button[type='submit'] {
+  font-weight: 800;
+  outline: none;
+  border: none;
+  border-radius: 4px;
+  padding: 10px 20px;
+  font-size: 16px;
+  background: rgba(149,0,255,1);
+  color: #fff;
+}
+```
+
+With the styling completed, we now move over to our `UserFeedPage.js` file and import the `ProfileForm` then return it. 
+
+```js
+import ProfileForm from 'components/ProfileForm'; 
+
+  return (
+    <article>
+      <DesktopNavigation user={user} active={'profile'} setPopped={setPopped} />
+      <div className='content'>
+        <ActivityForm popped={popped} setActivities={setActivities} />
+        <ProfileForm 
+          profile={profile}
+          popped={poppedProfile} 
+          setPopped={setPoppedProfile} 
+        />
+
+        <div className='activity_feed'>
+          <ProfileHeading setPopped={setPoppedProfile} profile={profile} />
+          <ActivityFeed activities={activities} />
+        </div>
+      </div>
+      <DesktopSidebar user={user} />
+    </article>
+  );
+}
+```
+
+When we refresh our web app and click `Edit Profile` it's getting a bit better.
+
+![image](https://user-images.githubusercontent.com/119984652/236581772-517e21c5-eef3-4e40-a047-efe10a254392.png)
+
+We refactor some code from `./frontend-react-js/src/components/ReplyForm.css` by removing a portion, then refactoring it into a new component called `Popup.css`.
+
+```css
+.popup_form_wrap {
+  z-index: 100;
+  position: fixed;
+  height: 100%;
+  width: 100%;
+  top: 0;
+  left: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+  align-items: center;
+  padding-top: 48px;
+  background: rgba(255,255,255,0.1)
+}
+
+.popup_form {
+  background: #000;
+  box-shadow: 0px 0px 6px rgba(190, 9, 190, 0.6);
+  border-radius: 16px;
+  width: 600px;
+}
+
+.popup_form .popup_heading {
+  display: flex;
+  flex-direction: row;
+  border-bottom: solid 1px rgba(255,255,255,0.4);
+  padding: 16px;
+}
+
+.popup_form .popup_heading .popup_title{
+  flex-grow: 1;
+  color: rgb(255,255,255);
+  font-size: 18px;
+
+}
+```
+
+We need to import this. Andrew says since this is a global component, we will import it into `frontend-react-js/src/app.js`.
+
+```js
+import './components/Popup.css';
+```
+
+We refresh our web app and take a look.
+
+![image](https://user-images.githubusercontent.com/119984652/236582644-f3a62a2a-33a8-4a16-9d06-da07466e319e.png)
+
+
