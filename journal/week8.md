@@ -1577,4 +1577,505 @@ We refresh our web app and immediately get an error stating `NameError: name 'db
 from lib.db import db
 ```
 
-After a few more syntax cleanups, we are now returning data in our Profile page, but our UI isn't built to implement it just yet. 
+After a few more syntax cleanups, we are now returning data in our Profile page, but our UI isn't built to implement it just yet. We move over to our `frontend-react-js/src/pages/UserFeedPage.js` file. Andrew explains we're returning the data and we have to `setActivities`, but now it's being set differently. We update our `loadData` function.
+
+```js
+  const loadData = async () => {
+    try {
+      const backend_url = `${process.env.REACT_APP_BACKEND_URL}/api/activities/${title}`
+      const res = await fetch(backend_url, {
+        method: "GET"
+      });
+      let resJson = await res.json();
+      if (res.status === 200) {
+        setActivities(resJson.activities)
+      } else {
+        console.log(res)
+      }
+    } catch (err) {
+      console.log(err);
+    }
+  };
+```
+
+If the response status is 200, the `setActivities` function is called with the `activities` property of the retrieved JSON data as its argument. This updates the component state with the retrieved data. If the response status is not 200, the error response is logged to the console.
+
+We've already set activities. We also have to set the profile, so we create another `const`. 
+
+```js
+const [profile, setProfile] = React.useState([]); 
+```
+
+Then we call `setActivities` to return the data of the profile.
+
+```js
+      if (res.status === 200) {
+        setActivities(resJson.profile)
+        setActivities(resJson.activities)
+```
+
+Andrew explains our data structure doesn't reflect this yet, so we must update our template in `backend-flask/db/sql/users/show.sql`. 
+
+```sql
+SELECT
+  (SELECT COALESCE(row_to_json(object_row),'{}'::json) FROM (
+    SELECT
+      users.uuid,
+      users.cognito_user_id as cognito_user_uuid,
+      users.handle,
+      users.display_name,
+  ) object_row) as profile,
+```
+
+The new subquery uses a `row_to_json` function to convert the select row data into a JSON object. The `COALESCE` function returns an empty JSON object `{}` in case the result of `row_to_json` is NULL. 
+
+We refresh our web app, and we're now returning data. Andrew points out that we can now use this data returned below:
+
+![image](https://user-images.githubusercontent.com/119984652/236334581-71dd17f2-3c74-48fe-9916-05ba259f5268.png)
+
+to populate our Profile page with information. 
+
+Continuing on with integration, we create a new component, `./frontend-react-js/src/components/EditProfileButton.js`. 
+
+```js
+import './EditProfileButton.css';
+
+export default function EditProfileButton(props) {
+  const pop_profile_form = (event) => {
+    event.preventDefault();
+    props.setPopped(true);
+    return false;
+  }
+
+  return (
+    <button onClick={pop_profile_form} className='profile-edit-button'>Edit Profile</button>
+  );
+}
+```
+
+We're calling the `pop_profile_form` function, passing it an event object as an argument. 
+
+We add the `EditProfileButton.js` to our `UserFeedPage.js` by importing it. 
+
+```js
+import EditProfileButton from '../components/EditProfileButton';
+```
+
+We refactor some code by removing it from `./frontend-react-js/src/components/ActivityFeed.js` and placing it into `UserFeedPage.js`. 
+
+![image](https://user-images.githubusercontent.com/119984652/236339390-a6d6964e-4207-403c-8499-d6577fe8f7a0.png)
+
+We then take this refactored code and place it in `HomeFeedPage.js`. 
+
+```js
+    <article>
+      <DesktopNavigation user={user} active={'home'} setPopped={setPopped} />
+      <div className='content'>
+        <ActivityForm
+          popped={popped}
+          setPopped={setPopped} 
+          setActivities={setActivities} 
+        />
+        <ReplyForm 
+          activity={replyActivity} 
+          popped={poppedReply} 
+          setPopped={setPoppedReply} 
+          setActivities={setActivities} 
+          activities={activities} 
+        />
+        <div className='activity_feed'>
+          <div className='activity_feed_heading'>
+            <div className='title'>Home</div>
+          </div>         
+          <ActivityFeed 
+            setReplyActivity={setReplyActivity} 
+            setPopped={setPoppedReply} 
+            activities={activities} 
+          />
+        </div>
+      </div>
+      <DesktopSidebar user={user} />
+    </article>
+  );
+}
+```
+
+We also add this to our `NotificationsFeedPage.js` as well. 
+
+```js
+        <div className='activity_feed'>
+          <div className='activity_feed_heading'>
+            <div className='title'>{title}</div>
+          </div>        
+          <ActivityFeed activities={activities} />
+        </div>
+```
+
+When we go back to our web app and refresh, it still works. We login, and navigate around various pages to make sure it works. We notice on the Profile page, it's not showing that we're logged in. Andrew explains not all of our conditionals are showing in the Profile page. Back in our workspace, we go to our `HomeFeedPage.js` and add an import for our `checkAuth` and `getAccessToken` functions.
+
+```js
+import {checkAuth, getAccessToken} from '../lib/CheckAuth';
+```
+
+We add headers to bring in our `access_token`, call the `getAccessToken` function, and add a `const` defining our `access_token`. 
+
+```js
+  const loadData = async () => {
+    try {
+      const backend_url = `${process.env.REACT_APP_BACKEND_URL}/api/activities/@${params.handle}`
+      await getAccessToken()
+      const access_token = localStorage.getItem("access_token")
+      const res = await fetch(backend_url, {
+        headers: {
+          Authorization: `Bearer ${access_token}`
+        },
+        method: "GET"
+      });
+```
+
+We then passed `setUser` as an argument for `checkAuth`. 
+
+```js
+  React.useEffect(()=>{
+    //prevents double call
+    if (dataFetchedRef.current) return;
+    dataFetchedRef.current = true;
+
+    loadData();
+    checkAuth(setUser);
+  }, [])
+```
+
+When we refresh the Profile page now, it's showing that we're logged in. We begin to talk about how we can implement different structure into the Profile page. We move back over to our `UserFeedPage.js` and make some additions. 
+
+```js
+    <article>
+      <DesktopNavigation user={user} active={'profile'} setPopped={setPopped} />
+      <div className='content'>
+        <ActivityForm popped={popped} setActivities={setActivities} />
+      
+        <div className='activity_feed'>
+          <div className='activity_feed_heading'>
+            <div className='title'>{profile.display_name}</div>
+            <div className='cruds_count'>{profile.cruds_count} Cruds</div>
+          </div>
+          <ActivityFeed activities={activities} />
+        </div>
+      </div>
+      <DesktopSidebar user={user} />
+    </article>
+```
+
+We must update our SQL template to return this new data field, `cruds_count`. Back over in `./backend-flask/db/sql/users/show.sql` we update the query.
+
+```sql
+SELECT
+  (SELECT COALESCE(row_to_json(object_row),'{}'::json) FROM (
+    SELECT
+      users.uuid,
+      users.cognito_user_id as cognito_user_uuid,
+      users.handle,
+      users.display_name,
+      users.bio,
+      (
+      SELECT 
+       count(true)
+      FROM public.activities
+      WHERE
+        activities.user_uuid = users.uuid
+       ) as cruds_count
+  ) object_row) as profile,
+```
+
+We refresh our web app, and now when we inspect the page, we are getting a `ReferenceError: title is not defined` error. 
+
+![image](https://user-images.githubusercontent.com/119984652/236344528-d26b883f-fecb-40fe-9c06-e155ff656376.png)
+
+This is what it's referencing:
+
+![image](https://user-images.githubusercontent.com/119984652/236344588-48b7cbee-a4fd-47b3-9300-852433f654a4.png)
+
+This is correct, we removed this field previously. We move over to `UserFeedPage.js` and update `backend_url`. 
+
+```js
+      const backend_url = `${process.env.REACT_APP_BACKEND_URL}/api/activities/@${params.handle}`
+```
+
+We refresh our web app again, and our Profile page is not displaying a name or any data. We navigate back to our `UserFeedPage.js` and find that we called `setActivities` twice. Assuming the HTTP response status of the fetch request is equal to 200, the first call to `setActivities` with `resJson.profile` as an argument would set the activities state to the profile value instead of the intended activities data. The second call to `setActivities` with `resJson.activities` would set the activities state to the correct value. We update our code:
+
+```js
+      if (res.status === 200) {
+        setProfile(resJson.profile)
+        setActivities(resJson.activities)
+```
+
+Now when we refresh the web app, we are seeing a name displayed on the Profile page. The Crud Count is there as well, its just not easliy visible right now, but we will fix this later.
+
+![image](https://user-images.githubusercontent.com/119984652/236346174-c29db7b7-6e02-449e-865e-9508a5d14bba.png)
+
+Andrew decides now that we're going to break this up into its own component. In `./frontend-react-js-src/components/` we create a new component named `ProfileHeading.js`. 
+
+```js
+import './ProfileHeading.css';
+import EditProfileButton from '../components/EditProfileButton';
+
+export default function ProfileHeading(props) {
+
+  return (
+  <div className='activity_feed_heading profile_heading'>
+    <div className='title'>{props.profile.display_name}</div>
+    <div className="cruds_count">{props.profile.cruds_count} Cruds</div>
+    
+    <div className="avatar">
+      <img src="https://assets.thejoshdev.com/avatars/data.jpg"></img>
+    </div>
+      
+    <div className="display_name">{props.display_name}</div>
+    <div className="handle">{props.handle}</div>
+      
+    <EditProfileButton setPopped={props.setPopped} />
+  </div> 
+  );
+}
+```
+
+In our `UserFeedPage.js` file, we add a `const`: 
+
+```js
+  const [poppedProfile, setPoppedProfile] = React.useState([]);
+```
+
+Then we add it in our `'activity_feed'`. 
+
+```js
+        <div className='activity_feed'>
+          <ProfileHeading setPopped={setPoppedProfile} profile={profile} />
+```
+
+We again refresh our web app. 
+
+![image](https://user-images.githubusercontent.com/119984652/236349473-5da4b037-ffba-42cd-bfcf-6944883ccc97.png)
+
+`ProfileHeading` is not defined. We need to import it. 
+
+In `UserFeedPage.js`.
+
+```js
+import ProfileHeading from '../components/ProfileHeading';
+```
+
+We again refresh our web app. The screenshot below is from Andrew's Profile page.
+
+![image](https://user-images.githubusercontent.com/119984652/236350016-1dfb72d2-d88a-472c-8be3-d894d10de2c4.png)
+
+We need to do some styling on this page now. In our `./frontend-react-js/src/components/ProfileHeading.css` file, we begin creating some styling. 
+
+```css
+.profile_heading .avatar img {
+    width: 140px;
+    height: 140px;
+    border-radius: 999px;
+}
+```
+
+We again refresh our web app.
+
+![image](https://user-images.githubusercontent.com/119984652/236350563-9fb53356-61df-4513-ad51-57b62404ca38.png)
+
+We need to add a banner image as well. We search for and find an image online for a banner. We need a way to upload this image as our banner, so we head over to S3 in the AWS console. Then we create a new folder in our `assets` bucket named `banners` and upload our `banner.jpg`. 
+
+In `ProfileHeading.js`, we make several changes.
+
+```js
+export default function ProfileHeading(props) {
+  const backgroundImage = 'url("https://assets.thejoshdev.com/banners/banner.jpg")';
+  const styles = {
+    backgroundImage: backgroundImage,
+    backgroundSize: 'cover',
+    backgroundPosition: 'center',
+  };
+  return (
+    <div className='activity_feed_heading profile_heading'>
+    <div className='title'>{props.profile.display_name}</div>
+    <div className="cruds_count">{props.profile.cruds_count} Cruds</div>
+    <div className="banner" style={styles} >
+```
+
+When we refresh our web app now, we have a banner! 
+
+![image](https://user-images.githubusercontent.com/119984652/236351897-ac231596-33ca-481c-aaff-9d5a79cac9a8.png)
+
+We make several changes to the `ProfileHeading.css` file. 
+
+```css
+.profile_heading .avatar {
+    position: absolute;
+    bottom: -74px;
+    left: 16px;  
+}
+.profile_heading .avatar img {
+    width: 148px;
+    height: 148px;
+    border-radius: 999px;
+    border: solid 8px var(--fg);
+}
+
+.profile_heading .banner {
+    position: relative;
+    height: 200px;
+}
+```
+
+Then, we made made changes to the styling of the `EditProfileButton.css`. 
+
+```css
+.profile-edit-button {
+    border: solid 1px rgba(255,255,255,0.5);
+    padding: 12px 20px;
+    font-size: 18px;
+    background: none;
+    border-radius: 999px;
+    color: rgba(255,255,255,0.8);
+    cursor: pointer;
+}
+
+.profile-edit-button:hover {
+    background: rgba(255,255,255,0.3);
+}
+```
+
+We refresh our app and draw our attention to the double entries of the username and the extra line as well. Andrew spots the issue in our `UserFeedPage.js` file and removes the duplicate code, since it now has its own component. Speaking of that component, in `ProfileHeading.js` we begin wrapping our `div`'s. 
+
+```js
+    <div className="info">
+      <div className='id'>
+        <div className="display_name">{props.display_name}</div>
+        <div className="handle">@{props.handle}</div>
+      </div>
+```
+
+We update the styling in `ProfileHeading.css` to reflect the changes.
+
+```css
+.profile_heading .banner {
+    position: relative;
+    height: 200px;
+}
+
+.profile_heading .info {
+    display: flex;
+    flex-direction: row;
+    align-items: start;
+    padding: 16px;
+}
+
+.profile_heading .info .id {
+    padding-top: 86px;
+    flex-grow: 1;
+    color: rgb(255,255,255);
+}
+```
+
+We refresh our web app again. We find that our username isn't displaying correctly now. 
+
+![image](https://user-images.githubusercontent.com/119984652/236354618-135ef667-2863-4e98-b69e-58728e17598d.png)
+
+The `div`'s we wrapped earlier aren't being called correctly. We fix this in the code: 
+
+From this:
+
+![image](https://user-images.githubusercontent.com/119984652/236354842-6af7082d-40f5-468a-b8d8-9202e4f95a13.png)
+
+To this:
+
+```js
+
+    <div className="info">
+      <div className='id'>
+        <div className="display_name">{props.profile.display_name}</div>
+        <div className="handle">@{props.profile.handle}</div>
+      </div>
+```
+
+This fixes the issue: 
+
+![image](https://user-images.githubusercontent.com/119984652/236354982-b669fe77-15ae-47b6-9f01-3cc09885c943.png)
+
+We continue editing the styling in `ProfileHeading.css`.
+
+```css
+.profile_heading {
+    padding-bottom: 0px;
+}
+
+.profile_heading .profile-avatar {
+    position: absolute;
+    bottom: -74px;
+    left: 16px;
+    width: 148px;
+    height: 148px;
+    border-radius: 999px;
+    border: solid 8px var(--fg);  
+}
+
+.profile_heading .banner {
+    position: relative;
+    height: 200px;
+}
+
+.profile_heading .info {
+    display: flex;
+    flex-direction: row;
+    align-items: start;
+    padding: 16px;
+}
+
+.profile_heading .info .id {
+    padding-top: 70px;
+    flex-grow: 1;
+}
+
+.profile_heading .info .id .display_name {
+    font-size: 24px;
+    font-weight: bold;
+    color: rgb(255,255,255);    
+}
+
+.profile_heading .info .id .handle {
+    font-size: 16px;
+    color: rgba(255,255,255,0.7);
+}
+```
+
+Then we give the `Edit Profile` button a hover. We edit our `EditProfileButton.css` file. 
+
+```css
+.profile-edit-button {
+    border: solid 1px rgba(255,255,255,0.5);
+    padding: 12px 20px;
+    font-size: 18px;
+    background: none;
+    border-radius: 999px;
+    color: rgba(255,255,255,0.8);
+    cursor: pointer;
+}
+
+.profile-edit-button:hover {
+    background: rgba(255,255,255,0.3);
+}
+```
+
+When we refresh our web app this time, our `Edit Profile` button is visible, readable, and has a hover action. 
+
+![image](https://user-images.githubusercontent.com/119984652/236355595-017a5ece-cc28-4b21-8179-f0a39d79a630.png)
+
+We add more styling to `ProfileHeading.css` to make our Crud Count visible. 
+
+```css
+.profile_heading .cruds_count {
+    color: rgba(255,255,255,0.7);
+}
+```
+
+![image](https://user-images.githubusercontent.com/119984652/236355879-836e4989-5501-49ae-9657-1ffd8b83cc2e.png)
+
