@@ -2533,3 +2533,168 @@ class UpdateProfile:
     })
     return data
 ```
+
+The run method takes `cognito_user_id`, `bio`, and `display_name` parameters, and returns a dictionary containing errors and data keys. The method first sets the errors and data values to None.
+
+If display_name is None or has a length less than 1, the errors list is set to `['display_name_blank']`. Andrew said we will handle errors near the end of the bootcamp. Otherwise, the `update_profile` method is called with the `bio`, `display_name`, and `cognito_user_id` parameters, and the `query_users_short` method is called with the handle value returned from the `update_profile` method to retrieve the updated user data.
+
+If there are no errors, the data value is set to the updated user data. The model dictionary is then returned with the errors and data keys.
+
+The `update_profile` method takes `bio`, `display_name`, and `cognito_user_id` parameters and updates the user data in the database with the specified values. The method first sets the bio value to an empty string if it is None, and then executes a query to update the user data in the database.
+
+The `query_users_short` method takes a handle parameter and executes an SQL query to retrieve the user data associated with the specified handle. The method then returns the user data as a dictionary.
+
+Now we must add the query that's going to update the user's profile. We make a new file in `./backend-flask/db/users` named `update.sql`.
+
+```sql
+UPDATE public.users 
+SET 
+  bio = %(bio)s,
+  display_name= %(display_name)s
+WHERE 
+  users.cognito_user_id = %(cognito_user_id)s
+RETURNING handle;
+```
+
+We're returning the `handle` after updating the `bio` and `display_name` fields in the `public.users` table for the user with a `cognito_user_id` that matches the value provided by the `%(cognito_user_id)s` parameter. The values provided by the `%(bio)s` and `%(display_name)s` parameters sets the `bio` and `display_name` fields respectively. 
+
+Andrew explained that in our `update_profile.py` file, we are using `./backend-flask/db/users/short.sql` which takes a handle, which is why we're returning `handle` in `./backend-flask/db/users/update.sql`.
+
+![image](https://user-images.githubusercontent.com/119984652/236628587-313a0184-e0f6-4578-b895-8dfa10f2d34d.png)
+
+Currently, there's no `bio` field added to our database. This code will fail if ran. We need to add it to our database. Andrew said we could've just added a query to insert it, but at some point we were needing migrations functionality added, so we begin discussing SQL migrations.
+
+What are SQL migrations? Let's let ChatGPT explain:
+"SQL migrations are a way of managing changes to the database schema over time, typically as part of a software development process. A migration is a script that describes a change to the database schema, such as adding or modifying a table, column, or index. The migration script is executed by a tool or framework that manages the database schema, which applies the changes to the database.
+
+SQL migrations allow developers to evolve the database schema over time in a controlled and repeatable manner. They also help to manage the complexity of database changes by providing a history of changes that can be reviewed, rolled back, or applied incrementally. In addition, migrations enable collaboration between developers working on the same project by providing a standardized way of managing database changes."
+
+Andrew shows us an example of a SQL migration library built on SQLAlchemy, but said that for the purposes of our learning, we're going to setup one of our own. We create a new folder in our `./bin/` directory named `generate`, then inside the new folder, a new Python script named `migration`.
+
+```py
+#!/usr/bin/env python3
+import time
+import os
+import sys
+
+if len(sys.argv) == 2:
+  name = sys.argv[1]
+else:
+  print("pass a filename: eg. ./bin/generate/migration add_bio_column")
+  exit(0)
+
+timestamp = str(time.time()).replace(".","")
+
+filename = f"{timestamp}_{name}.py"
+
+# convert undername name to title case e.g. add_bio_column -> AddBioColumn
+klass = name.replace('_', ' ').title().replace(' ','')
+
+file_content = f"""
+from lib.db import db
+class {klass}Migration:
+  def migrate_sql():
+    data = \"\"\"
+    \"\"\"
+    return data
+  def rollback_sql():
+    data = \"\"\"
+    \"\"\"
+    return data
+  def migrate():
+    db.query_commit({klass}Migration.migrate_sql(),{{
+    }})
+  def rollback():
+    db.query_commit({klass}Migration.rollback_sql(),{{
+    }})
+migration = AddBioColumnMigration
+"""
+# remove leading and trailing new lines
+file_content = file_content.lstrip('\n').rstrip('\n')
+
+current_path = os.path.dirname(os.path.abspath(__file__))
+file_path = os.path.abspath(os.path.join(current_path, '..', '..','backend-flask','db','migrations',filename))
+print(file_path)
+
+with open(file_path, 'w') as f:
+  f.write(file_content)
+```
+
+Andrew breaks this down. First we have a name:
+
+```sh
+if len(sys.argv) == 2:
+  name = sys.argv[1]
+else:
+  print("pass a filename: eg. ./bin/generate/migration hello")
+  exit(0)
+```
+
+We generate a unique timestamp based on the current time in seconds, to create a unique filename for the migration file:
+
+```sh
+timestamp = str(time.time()).replace(".","")
+
+```
+
+The script then constructs the filename by concatenating the timestamp and the desired migration name:
+
+```sh
+filename = f"{timestamp}_{name}.py"
+```
+
+Then we generate out a Python Migration file. 
+
+```sh
+file_content = f"""
+from lib.db import db
+class {klass}Migration:
+  def migrate_sql():
+    data = \"\"\"
+    \"\"\"
+    return data
+  def rollback_sql():
+    data = \"\"\"
+    \"\"\"
+    return data
+  def migrate():
+    db.query_commit({klass}Migration.migrate_sql(),{{
+    }})
+  def rollback():
+    db.query_commit({klass}Migration.rollback_sql(),{{
+    }})
+migration = AddBioColumnMigration
+"""
+```
+
+We then write the contents of the migration file by getting the current directory of the script, contructing a path to the `migrations` directory, which we haven't created yet. 
+
+```sh
+current_path = os.path.dirname(os.path.abspath(__file__))
+file_path = os.path.abspath(os.path.join(current_path, '..', '..','backend-flask','db','migrations',filename))
+```
+
+Next, it then opens a file object at this path and writes the contents of the `file_content` variable to it.
+
+```sh
+with open(file_path, 'w') as f:
+  f.write(file_content)
+```
+
+We now have to create the directory our script is writing to. We navigate over to `backend-flask/db/` and create a new folder named `migrations`. Within the directory, we create a `.keep` file, since the directory is currently empty, but we want to KEEP the directory around regardless. Then, we make our new script executable. After this, we test the script.
+
+```sh
+./bin/generate/migration add_bio_column
+```
+
+![image](https://user-images.githubusercontent.com/119984652/236630218-9f64688f-b969-4b10-a9b7-43dac3566106.png)
+
+You can see we now generated the Python file below:
+
+![image](https://user-images.githubusercontent.com/119984652/236630271-2a8b56cf-2b82-4803-852d-8f45bca09982.png)
+
+We view the generated migration file:
+
+![image](https://user-images.githubusercontent.com/119984652/236630348-bb24fff4-9464-43c0-ab9e-96acdcd27e26.png)
+
+Andrew explains the idea is we can generate the file, then we populate it. 
