@@ -2441,4 +2441,95 @@ We refresh our web app and take a look.
 
 ![image](https://user-images.githubusercontent.com/119984652/236582644-f3a62a2a-33a8-4a16-9d06-da07466e319e.png)
 
+Andrew notes that if we click outside of the Profile form, the form goes away. This is by design. Andrew shows us `frontend-react-js/src/components/ProfileForm.js`. 
 
+![image](https://user-images.githubusercontent.com/119984652/236624465-8184cfe6-eea2-41f0-b061-c14d0e8cc058.png)
+
+
+The `close` function in the code is an event listener function that is called when the user clicks on the `div` element with `className` of `popup_form_wrap profile_popup`. The function checks if the clicked element has a `classList` that contains `profile_popup` and, if so, it calls `props.setPopped(false)` to update the popped state to false and close the popup. 
+
+We now must add an endpoint for the Profile so it will save. We navigate over to our `./backend-flask/app.py` file and implement it.
+
+```py
+@app.route("/api/profile/update", methods=['POST','OPTIONS'])
+@cross_origin()
+def data_update_profile():
+  bio          = request.json.get('bio',None)
+  display_name = request.json.get('display_name',None)
+  access_token = extract_access_token(request.headers)
+  try:
+    claims = cognito_jwt_token.verify(access_token)
+    cognito_user_id = claims['sub']
+    model = UpdateProfile.run(
+      cognito_user_id=cognito_user_id,
+      bio=bio,
+      display_name=display_name
+    )
+    if model['errors'] is not None:
+      return model['errors'], 422
+    else:
+      return model['data'], 200
+  except TokenVerifyError as e:
+    # unauthenicatied request
+    app.logger.debug(e)
+    return {}, 401
+```
+
+More ChatGPT insight: 
+"The function first retrieves the `bio` and `display_name` parameters from the JSON data in the request body, and extracts the `access_token` from the request headers using the `extract_access_token` function. The try block attempts to verify the access token using the `cognito_jwt_token.verify` function, which returns a dictionary containing the token's claims if successful. The `cognito_user_id` is extracted from the claims using the `sub` key.
+
+The `UpdateProfile.run` method is then called with the `cognito_user_id`, `bio`, and `display_name` parameters to update the user's profile data. The model variable contains the result of the `UpdateProfile.run` method call.
+
+If `model['errors']` is not None, indicating that there were errors during the update operation, the function returns the errors and a status code of 422. Otherwise, the function returns the data and a status code of 200 (OK).
+
+If the access token cannot be verified due to a `TokenVerifyError`, the function returns an empty dictionary and a status code of 401 (Unauthorized)."
+
+We also add an import statement for the service.
+
+```py
+from services.update_profile import *
+```
+
+Then, we create a new service for this in `./backend-flask/services` named `update_profile.py`. 
+
+```py
+from lib.db import db
+
+class UpdateProfile:
+  def run(cognito_user_id,bio,display_name):
+    model = {
+      'errors': None,
+      'data': None
+    }
+
+    if display_name == None or len(display_name) < 1:
+      model['errors'] = ['display_name_blank']
+
+    if model['errors']:
+      model['data'] = {
+        'bio': bio,
+        'display_name': display_name
+      }
+    else:
+      handle = UpdateProfile.update_profile(bio,display_name,cognito_user_id)
+      data = UpdateProfile.query_users_short(handle)
+      model['data'] = data
+    return model
+
+  def update_profile(bio,display_name,cognito_user_id):
+    if bio == None:    
+      bio = ''
+
+    sql = db.template('users','update')
+    handle = db.query_commit(sql,{
+      'cognito_user_id': cognito_user_id,
+      'bio': bio,
+      'display_name': display_name
+    })
+  def query_users_short(handle):
+    sql = db.template('users','short')
+    data = db.query_select_object(sql,{
+      'handle': handle
+    })
+    return data
+```
