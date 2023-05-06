@@ -108,7 +108,10 @@ createBucket(bucketName: string): s3.IBucket {
 }
 ```
 
-Also since this is `TypeScript` we have to explicitly state what is being returned. We're returning the `bucket` but on the first line above, we're returning it as an `s3.IBucket`. Per ChatGPT for added detail: `"  In TypeScript, s3.IBucket is an interface that defines the shape of an S3 bucket object, but does not provide the implementation details. The s3.Bucket object is returned, which satisfies the s3.IBucket interface, since s3.Bucket implements the IBucket interface. This returned object can then be used to interact with the S3 bucket, using the methods and properties provided by the s3.Bucket class."`
+Also since this is `TypeScript` we have to explicitly state what is being returned. We're returning the `bucket` but on the first line above, we're returning it as an `s3.IBucket`. 
+
+Per ChatGPT for added detail: 
+"  In TypeScript, s3.IBucket is an interface that defines the shape of an S3 bucket object, but does not provide the implementation details. The `s3.Bucket` object is returned, which satisfies the `s3.IBucket` interface, since `s3.Bucket` implements the `IBucket` interface. This returned object can then be used to interact with the S3 bucket, using the methods and properties provided by the `s3.Bucket` class."
 
 Back in our definition, we want to call this and make a bucket from our main class. We define another constant.
 
