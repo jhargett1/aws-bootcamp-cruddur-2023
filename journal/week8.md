@@ -2622,7 +2622,7 @@ with open(file_path, 'w') as f:
 
 Andrew breaks this down. First we have a name:
 
-```sh
+```py
 if len(sys.argv) == 2:
   name = sys.argv[1]
 else:
@@ -2632,7 +2632,7 @@ else:
 
 We generate a unique timestamp based on the current time in seconds, to create a unique filename for the migration file:
 
-```sh
+```py
 timestamp = str(time.time()).replace(".","")
 
 ```
@@ -2645,7 +2645,7 @@ filename = f"{timestamp}_{name}.py"
 
 Then we generate out a Python Migration file. 
 
-```sh
+```py
 file_content = f"""
 from lib.db import db
 class {klass}Migration:
@@ -2669,14 +2669,14 @@ migration = AddBioColumnMigration
 
 We then write the contents of the migration file by getting the current directory of the script, contructing a path to the `migrations` directory, which we haven't created yet. 
 
-```sh
+```py
 current_path = os.path.dirname(os.path.abspath(__file__))
 file_path = os.path.abspath(os.path.join(current_path, '..', '..','backend-flask','db','migrations',filename))
 ```
 
 Next, it then opens a file object at this path and writes the contents of the `file_content` variable to it.
 
-```sh
+```py
 with open(file_path, 'w') as f:
   f.write(file_content)
 ```
@@ -2698,3 +2698,507 @@ We view the generated migration file:
 ![image](https://user-images.githubusercontent.com/119984652/236630348-bb24fff4-9464-43c0-ab9e-96acdcd27e26.png)
 
 Andrew explains the idea is we can generate the file, then we populate it. 
+
+```py
+from lib.db import db
+
+class AddBioColumnMigration:
+  def migrate_sql():
+    data = """
+    ALTER TABLE public.users ADD COLUMN bio text;
+    """
+    return data
+  def rollback_sql():
+    data = """
+    ALTER TABLE public.users DROP COLUMN;
+    """
+    return data
+    
+  def migrate():
+    this.query_commit(AddBioColumnMigration.migrate_sql(),{
+    })
+    
+  def rollback():
+    this.query_commit(AddBioColumnMigration.rollback_sql(),{
+    })
+    
+migration = AddBioColumnMigration
+```
+
+With what we've populated in the migration file, the function `migrate_sql` will return a string that performs the SQL query to add the new column `bio` to our database.  `rollback_sql` function will return a string that performs a SQL query to drop the `bio` column instead, hence "rollback". Andrew explains in Ruby and other languages, these functions are called an "up" and a "down" instead of "migrate" and "rollback" respectively. We're naming them as they are because you "migrate forward" to add the column and "rollback" to revert the changes and drop the column.
+
+We need a way to trigger these migration files. For this, we will create a couple of new scripts. We head to our `./bin/db` directory and create two new scripts within this folder: `migrate` and `rollback`. Before even implementing code to these scripts, we make them executable so we don't forget. Then, we implement `./bin/db/migrate`.
+
+```py
+#!/usr/bin/env python3
+
+import os
+import sys
+import glob
+import re
+import time
+import importlib
+
+current_path = os.path.dirname(os.path.abspath(__file__))
+parent_path = os.path.abspath(os.path.join(current_path, '..', '..','backend-flask'))
+sys.path.append(parent_path)
+from lib.db import db
+
+def get_last_successful_run():
+  sql = """
+  SELECT
+      coalesce(
+      (SELECT last_successful_run
+      FROM public.schema_information
+      LIMIT 1),
+      '0') as last_succesful_run
+  """
+  return int(db.query_value(sql,{},verbose=False))
+
+def set_last_successful_run(value):
+  sql = """
+  UPDATE schema_information
+  SET last_successful_run = %(last_successful_run)s
+  """
+  db.query_commit(sql,{'last_successful_run': value})
+  return value
+
+last_successful_run = get_last_successful_run()
+
+migrations_path = os.path.abspath(os.path.join(current_path, '..', '..','backend-flask','db','migrations'))
+sys.path.append(migrations_path)
+migration_files = glob.glob(f"{migrations_path}/*")
+
+
+for migration_file in migration_files:
+  filename = os.path.basename(migration_file)
+  module_name = os.path.splitext(filename)[0]
+  match = re.match(r'^\d+', filename)
+  if match:
+    file_time = int(match.group())
+    if last_successful_run <= file_time:
+      mod = importlib.import_module(module_name)
+      mod.migration.migrate()
+      print('running migration: ',module_name)
+      timestamp = str(time.time()).replace(".","")
+      last_successful_run = set_last_successful_run(timestamp)
+```
+
+In this script, we are importing the necessary modules, including the `db` module from our backend `lib`. Then, we're setting the `current_path` and `parent_path` env vars based on the location of the script and our backend directory. 
+
+```py
+import os
+import sys
+import glob
+import re
+import time
+import importlib
+
+current_path = os.path.dirname(os.path.abspath(__file__))
+parent_path = os.path.abspath(os.path.join(current_path, '..', '..','backend-flask'))
+sys.path.append(parent_path)
+from lib.db import db
+```
+
+Our `get_last_successful_run` function is querying the `schema_information` table to get the timestamp of the last successful migration. If there's been no successful migration recorded, it's returning a value of 0. 
+
+```py
+def get_last_successful_run():
+  sql = """
+  SELECT
+      coalesce(
+      (SELECT last_successful_run
+      FROM public.schema_information
+      LIMIT 1),
+      '0') as last_succesful_run
+  """
+  return int(db.query_value(sql,{},verbose=False))
+```
+
+The `set_last_successful_run` function updates the `schema_information` table with the provided timestamp and returns the same value.
+
+The script then retrieves the last successful migration timestamp using `get_last_successful_run`, and sets the `migrations_path` env var to the migrations directory in the backend's `db` directory. It uses `glob` to retrieve a list of all migration files in the directory, and iterates over them in order of filename as a list or array.
+
+```py
+def set_last_successful_run(value):
+  sql = """
+  UPDATE schema_information
+  SET last_successful_run = %(last_successful_run)s
+  """
+  db.query_commit(sql,{'last_successful_run': value})
+  return value
+
+last_successful_run = get_last_successful_run()
+
+migrations_path = os.path.abspath(os.path.join(current_path, '..', '..','backend-flask','db','migrations'))
+sys.path.append(migrations_path)
+migration_files = glob.glob(f"{migrations_path}/*")
+```
+
+For each migration file, the script extracts the filename and module name, and extracts the timestamp from the filename using a regular expression. If the timestamp is greater than or equal to the last successful migration timestamp, the script imports the module and calls its `migrate` method to perform the migration. It then updates the `schema_information` table with the current timestamp using `set_last_successful_run`.
+
+```py
+for migration_file in migration_files:
+  filename = os.path.basename(migration_file)
+  module_name = os.path.splitext(filename)[0]
+  match = re.match(r'^\d+', filename)
+  if match:
+    file_time = int(match.group())
+    if last_successful_run <= file_time:
+      mod = importlib.import_module(module_name)
+      mod.migration.migrate()
+      print('running migration: ',module_name)
+      timestamp = str(time.time()).replace(".","")
+      last_successful_run = set_last_successful_run(timestamp)
+```
+
+For this to run correctly, we must implement the `schema_information` table into our `./backend-flask/db/schema.sql` file. We add a query to create the table.
+
+```sql
+CREATE TABLE IF NOT EXISTS public.schema_information (
+  last_successful_run text
+);
+```
+
+Andrew explains this query is different than others because we're not dropping this table if it exists, we're creating the table if it doesn't exist since it's storing useful information for migrations. Since our code is already expecting the table to be created, from our terminal we will manually add it. But first, we must connect to our database, so we'll use our `connect` script to do so.
+
+```sh
+./bin/db/connect
+```
+
+Now that we're connected to our database, we create the table. 
+
+![image](https://user-images.githubusercontent.com/119984652/236636902-b29468a5-c91a-41e6-a826-8eb3ab58368f.png)
+
+We next run the query for our `get_last_successful_run` function manually, just so we can see what the value is returned.
+
+![image](https://user-images.githubusercontent.com/119984652/236637047-da87ddc3-f62c-43a7-aa57-d3839c510121.png)
+
+Since we have not run the migration yet, the value is 0. Andrew explains the way `coalesce` works within our function.
+
+![image](https://user-images.githubusercontent.com/119984652/236637085-43bd1a2a-48b9-412c-8f86-79e444d8e436.png)
+
+Since we always want to return a default value, and there's current no value since we've never ran a migration, we want to return back a number, or empty value. In the snippet above,  if there is no record, `coalesce` returns back a NULL value. Since we can't return a number, we're returning a string value of `0` instead. If this does not make sense, just remember: the query retrieves the value of the `last_successful_run` column from the `schema_information` table, or the string '0' if the column does not exist or is NULL.
+
+We now move onto the other script we were working on, `./bin/db/rollback`.
+
+```py
+#!/usr/bin/env python3
+
+import os
+import sys
+import glob
+import re
+import time
+import importlib
+
+current_path = os.path.dirname(os.path.abspath(__file__))
+parent_path = os.path.abspath(os.path.join(current_path, '..', '..','backend-flask'))
+sys.path.append(parent_path)
+from lib.db import db
+
+def get_last_successful_run():
+  sql = """
+  SELECT
+      coalesce(
+      (SELECT last_successful_run
+      FROM public.schema_information
+      LIMIT 1),
+      '0') as last_succesful_run
+  """
+  return int(db.query_value(sql,{},verbose=False))
+
+def set_last_successful_run(value):
+  sql = """
+  UPDATE schema_information
+  SET last_successful_run = %(last_succesful_run)s
+  """
+  db.query_commit(sql,{'last_successful_run': value})
+  return value
+
+last_successful_run = get_last_successful_run()
+
+migrations_path = os.path.abspath(os.path.join(current_path, '..', '..','backend-flask','db','migrations'))
+sys.path.append(migrations_path)
+migration_files = glob.glob(f"{migrations_path}/*")
+
+
+last_migration_file = None
+for migration_file in migration_files:
+  if last_migration_file == None:
+    filename = os.path.basename(migration_file)
+    module_name = os.path.splitext(filename)[0]
+    match = re.match(r'^\d+', filename)
+    if match:
+      file_time = int(match.group())
+      if last_successful_run > file_time:
+        last_migration_file = module_name
+print(last_migration_file)
+```
+
+This script is similar to `migrate` as we're using `get_last_successful_run` and `set_last_successful_run`, adding the migration file path and iterating through it, but the key difference is, we're just checking for the last migration. 
+
+```py
+last_migration_file = None
+for migration_file in migration_files:
+  if last_migration_file == None:
+    filename = os.path.basename(migration_file)
+    module_name = os.path.splitext(filename)[0]
+    match = re.match(r'^\d+', filename)
+    if match:
+      file_time = int(match.group())
+      if last_successful_run > file_time:
+        last_migration_file = module_name
+print(last_migration_file)
+```
+
+`last_migration_file` is initially set to None. On each migration file, if `last_migration_file` is still None, the filename and module name is extracted, then it's checked to see if the timestamp is smaller than the last successful migration file's timestamp. If this condition is true, the `module_name` is assigned to `last_migration_file`. The loop will stop after the first migration file that is older than the last successful run is found, and `last_migration_file` will contain the name of the last migration that was run successfully. Then we print out the value of the `last_migration_file`. 
+
+We attempt to run the `migrate` script.
+
+```sh
+./bin/db/migrate
+```
+
+![image](https://user-images.githubusercontent.com/119984652/236637966-78438963-2973-4a34-a71c-0b49abd45e60.png)
+
+Andrew explains we're receiving this error because he didn't want our queries to print out on our return statement `return int(db.query_value(sql,{},verbose=False))`. To fix this, we must update `./backend-flask/lib/db.py`. 
+
+```py
+  def query_commit(self,sql,params={},verbose=True):
+    if verbose:
+      self.print_sql('commit with returning',sql,params)
+```
+
+```py
+  def query_array_json(self,sql,params={},verbose=True):
+    if verbose: 
+      self.print_sql('array',sql,params)
+```
+
+```py
+  def query_object_json(self,sql,params={},verbose=True):
+    if verbose: 
+      self.print_sql('json',sql,params)
+      self.print_params(params)
+```
+
+```py
+  def query_value(self,sql,params={},verbose=True):
+    if verbose: 
+      self.print_sql('value',sql,params)
+```
+
+We again attempt to run our script. This time, we receive a different error from the terminal:
+
+![image](https://user-images.githubusercontent.com/119984652/236638421-aa1c4b6c-c5d2-406f-bd7e-813fdc3fe1e0.png)
+
+We must navigate back over to our `migration.py` file to fix. We update the file from this:
+
+![image](https://user-images.githubusercontent.com/119984652/236638494-ad567a87-d8cc-4abe-bc22-aa2fb630f0e2.png)
+
+To this: 
+
+![image](https://user-images.githubusercontent.com/119984652/236638478-7279e702-8f18-466e-9a9f-a6be3dec27c2.png)
+
+Then we make the same changes to the queries in our migration file in the `./backend-flask/db/migrations` directory itself. 
+
+![image](https://user-images.githubusercontent.com/119984652/236638680-adf78767-9a23-45cb-9f69-5670fa96aa66.png)
+
+We again run our script: `./bin/db/migrate`. 
+
+![image](https://user-images.githubusercontent.com/119984652/236638739-3ef4df0c-957c-4a0d-ba05-99142036a713.png)
+
+You can see from the image above that we're setting the `last_successful_run`. Since we know that's working, we add the additional flag we added above to our `migrate` script to remove the query from printing out. 
+
+```py
+db.query_commit(sql,{'last_successful_run': value},verbose=False)
+```
+
+Since `migrate` is now working, we need to see of `rollback` will. We run our script: `./bin/db/rollback`. It returns None, but it should be returning the value of `last_migration_file`, which we know ran successfully with `migrate`. We add a few print lines to our code in `rollback` to see what's being returned, then run the script again.
+
+![image](https://user-images.githubusercontent.com/119984652/236639020-d005dc5a-1607-44a4-b68c-b83c638f0dee.png)
+
+![image](https://user-images.githubusercontent.com/119984652/236639032-6c622915-b425-4e2a-8249-42c360530636.png)
+
+We can see that `last_successful_run` is returning None. We return to the terminal where we're connected to our database and repeat our query for `get_last_successful_run`:
+
+![image](https://user-images.githubusercontent.com/119984652/236639113-ddf27c7e-515e-4cdc-8089-d24d900ecade.png)
+
+We try to manually set `last_successful_run` in the `schema_information` table by running our query manually for `set_last_successful_run`:
+
+```sql
+UPDATE schema_information SET last_successful_run ="1";
+```
+
+Then we again repeat the `get_last_successful_run` query to see what's returned:
+
+![image](https://user-images.githubusercontent.com/119984652/236639297-0ac26e7f-90ab-49e0-bca1-0e076b77cf73.png)
+
+Andrew said this is because we're trying to update the table instead of inserting into it. Since `last_successful_run` should never be None or NULL value, we have to update our queries. In `migrate`, we update the query for `get_last_successful_run`. 
+
+```py
+def get_last_successful_run():
+  sql = """
+    SELECT last_successful_run
+    FROM public.schema_information
+    LIMIT 1
+  """
+  return int(db.query_value(sql,{},verbose=False))
+```
+
+We update `rollback` with the updated query as well. Then, we move over to `./backend-flask/db/schema.sql`as we must insert into the `schema_information` table.
+
+```sql
+INSERT INTO public.schema_information (last_successful_run) 
+VALUES ("0")
+```
+
+Andrew further explains that we only want to do this once. So there must be a condition where the record is only created if the record doesn't exist. We add this:
+
+```sql
+INSERT INTO public.schema_information (last_successful_run) 
+VALUES ("0")
+WHERE (SELECT count(true) FROM public.schema_information) = 0
+```
+
+We attempt to manually insert into our database from terminal where we're connected, but it doesn't work. Our `WHERE` clause is invalid. We modify the query:
+
+```sql
+INSERT INTO public.schema_information (last_successful_run) 
+SELECT "0"
+WHERE (SELECT count(true) FROM public.schema_information) = 0
+```
+
+![image](https://user-images.githubusercontent.com/119984652/236640383-d971fdde-c9b5-4817-becf-6e40907d1928.png)
+
+After some review, Andrew provides a solution. We will add another field to our `schema_information` table. This will allow us to insert into the database but it will be dependent upon the value of `id`. We also add the `UNIQUE` constraint to the `id` field to ensure that nothing else can appear with the same value.
+
+```sql
+CREATE TABLE IF NOT EXISTS public.schema_information (
+  id integer UNIQUE,
+  last_successful_run text
+);
+INSERT INTO public.schema_information (id,last_successful_run) 
+VALUES (1,'0')
+ON CONFLICT (id) DO NOTHING;
+```
+
+The query now inserts a single row with `id` set to 1 and `last_successful_run` set to '0'. The `ON CONFLICT` clause specifies that if a row with `id` of 1 already exists, then the insert should do nothing.
+
+We manually drop our table `schema_information`. Then we manually run our first query above:
+
+```sql
+CREATE TABLE IF NOT EXISTS public.schema_information (
+  id integer UNIQUE,
+  last_successful_run text
+);
+```
+
+Then our second:
+
+![image](https://user-images.githubusercontent.com/119984652/236641144-c36d45a2-d4d1-458f-b717-741615738ed9.png)
+
+It completed successfully. We check to be sure.
+
+```sql
+SELECT * FROM schema_information;
+```
+
+![image](https://user-images.githubusercontent.com/119984652/236641176-6da6ad82-482c-42f1-94fe-d0f61933cd38.png)
+
+Then to test our `ON CONFLICT` clause by running the query again to make sure it won't insert. 
+
+![image](https://user-images.githubusercontent.com/119984652/236641201-fcbe1a31-5f97-4e19-b669-cddbac999df6.png)
+
+Before we can test our `rollback` script again, we must manually run the query from our generated migration file, since it didn't run correctly the first time.
+
+![image](https://user-images.githubusercontent.com/119984652/236641276-a83830bc-8744-4e73-a8b4-a2e4c9087a2d.png)
+
+```sql
+ALTER TABLE public.users DROP COLUMN bio;
+```
+The query completes successfully. Now, we can attempt our migration again. 
+
+```sh
+./bin/db/migrate
+```
+
+![image](https://user-images.githubusercontent.com/119984652/236641364-2f236547-af25-4404-82e0-747c857ef0d0.png)
+
+We again query our database to make sure the `migrate` script worked correctly.
+
+![image](https://user-images.githubusercontent.com/119984652/236641413-9aa43f6d-c8b8-4339-a26d-7c137b6f0e5b.png)
+
+We again test `rollback`.
+
+```sh
+./bin/db/rollback
+```
+
+This time it completes successfully.
+
+![image](https://user-images.githubusercontent.com/119984652/236641460-fb6fbbbe-9d4a-4aaa-a776-9412b4bdbe87.png)
+
+We now must alter our `rollback` script as we only want it to run once. For this, we grab code from our `migrate` script and refactor it into our `rollback` script. 
+
+```py
+last_migration_file = None
+for migration_file in migration_files:
+  if last_migration_file == None:
+    filename = os.path.basename(migration_file)
+    module_name = os.path.splitext(filename)[0]
+    match = re.match(r'^\d+', filename)
+    if match:
+      file_time = int(match.group())
+      if last_successful_run > file_time:
+        last_migration_file = module_name
+        mod = importlib.import_module(module_name)
+        print('=== rolling back: ',module_name)      
+        mod.migration.rollback()
+        set_last_successful_run(file_time)
+```
+
+We also update our query for `set_last_successful_run` in `rollback` and `migrate` to be more explicit by adding a `WHERE` clause. 
+
+```py
+def set_last_successful_run(value):
+  sql = """
+  UPDATE schema_information
+  SET last_successful_run = %(last_successful_run)s
+  WHERE id = 1
+  """
+  db.query_commit(sql,{'last_successful_run': value})
+  return value
+```
+
+We want to test this, so we again run our `migrate` script.
+
+```sh
+./bin/db/migrate
+```
+
+We refresh our web app, then navigate to the Profile page and click `Edit Profile`. When we attempt to update the Bio field then save, nothing happens. We access the backend logs to see if we're getting any errors, which it turns out, we are:
+
+![image](https://user-images.githubusercontent.com/119984652/236642002-25b97450-6752-411f-a645-de3e5a1c0a08.png)
+
+Andrew has a good idea what the problem is. We move over to our `backend-flask/services/update_profile.py` file and take a look at the `query_users_short` function. 
+
+![image](https://user-images.githubusercontent.com/119984652/236642085-95795a83-10b2-4708-93e3-da57d6bde05a.png)
+
+It's no longer `query_select_object` just `query_object`. We update the code:
+
+![image](https://user-images.githubusercontent.com/119984652/236642148-6ef43057-4e1f-4c70-8bea-6128239468f6.png)
+
+We refresh the web app, then view our backend logs again:
+
+![image](https://user-images.githubusercontent.com/119984652/236642191-6ecff5a8-b055-4967-b233-21c9b1385ae7.png)
+
+We navigate to `./backend-flask/lib/db.py` to check the function there and make sure we're naming it correctly here. 
+
+![image](https://user-images.githubusercontent.com/119984652/236642305-adfda2dd-86b7-44fe-8207-c85c8483bdcd.png)
+
+Since we're wanting to return JSON here, we need to update `update_profile.py` to `query_object_json` instead.
+
+![image](https://user-images.githubusercontent.com/119984652/236642352-9cb0916c-4583-4977-9e59-dc3e1942cd4e.png)
+
