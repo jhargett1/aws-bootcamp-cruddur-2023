@@ -3198,7 +3198,127 @@ We navigate to `./backend-flask/lib/db.py` to check the function there and make 
 
 ![image](https://user-images.githubusercontent.com/119984652/236642305-adfda2dd-86b7-44fe-8207-c85c8483bdcd.png)
 
-Since we're wanting to return JSON here, we need to update `update_profile.py` to `query_object_json` instead.
+Since we're wanting to return JSON here, we need to update `update_profile.py` to use `query_object_json` instead.
 
 ![image](https://user-images.githubusercontent.com/119984652/236642352-9cb0916c-4583-4977-9e59-dc3e1942cd4e.png)
 
+Another app refresh, and another error is returned from the backend logs.
+
+![image](https://user-images.githubusercontent.com/119984652/236646024-a80246ba-a236-4fc5-96bb-bdbf4a67b8a4.png)
+
+We navigate to our `./backend-flask/app.py` file and review. It's a problem with our try. We're not assigning `model` :
+
+```py
+@app.route("/api/profile/update", methods=['POST','OPTIONS'])
+@cross_origin()
+def data_update_profile():
+  bio          = request.json.get('bio',None)
+  display_name = request.json.get('display_name',None)
+  access_token = extract_access_token(request.headers)
+  try:
+    claims = cognito_jwt_token.verify(access_token)
+    cognito_user_id = claims['sub']
+    UpdateProfile.run(
+      cognito_user_id=cognito_user_id,
+      bio=bio,
+      display_name=display_name
+    )
+    if model['errors'] is not None:
+      return model['errors'], 422
+    else:
+      return model['data'], 200
+  except TokenVerifyError as e:
+    # unauthenicatied request
+    app.logger.debug(e)
+    return {}, 401
+```
+
+We make the change to assign it:
+
+```py
+  try:
+    claims = cognito_jwt_token.verify(access_token)
+    cognito_user_id = claims['sub']
+    model = UpdateProfile.run(
+      cognito_user_id=cognito_user_id,
+      bio=bio,
+      display_name=display_name
+    )
+    if model['errors'] is not None:
+      return model['errors'], 422
+```
+
+Now when we make a change to our Profile from the web app and click Save, our edit menu goes away. The change isn't propagated right away, but requires a refresh of the page, then the changes are reflected in the Profile. Now that this is working, we need to render out our Bio that we added to the Profile. We head over to `./frontend-react-js/src/components/ProfileHeading.js`. We want to add this as a separate `div` beneath our `Edit Profile` button.
+
+```js
+  return (
+    <div className='activity_feed_heading profile_heading'>
+    <div className='title'>{props.profile.display_name}</div>
+    <div className="cruds_count">{props.profile.cruds_count} Cruds</div>
+    <div className="banner" style={styles} >
+      <ProfileAvatar id={props.profile.cognito_user_uuid} />
+    </div>
+    <div className="info">
+      <div className='id'>
+        <div className="display_name">{props.profile.display_name}</div>
+        <div className="handle">@{props.profile.handle}</div>
+      </div>
+      <EditProfileButton setPopped={props.setPopped} />
+    </div>
+    <div className="bio">{props.profile.bio}</div>
+
+  </div> 
+  );
+}
+```
+
+Next we move over to the `ProfileHeading.css` file to work on the styling for the Bio section:
+
+```css
+.profile_heading .bio {
+    padding: 16px;
+    color: rgba(255,255,255,0.7);
+}
+```
+
+Then, we have to make sure `bio` is included in data returned, so we navigate to our template query in `./backend-flask/db/sql/users/show.sql` and add it.
+
+```sql
+SELECT
+  (SELECT COALESCE(row_to_json(object_row),'{}'::json) FROM (
+    SELECT
+      users.uuid,
+      users.cognito_user_id as cognito_user_uuid,
+      users.handle,
+      users.display_name,
+      users.bio,
+      (
+```
+
+Now when we refresh our web app, we have a bio field added to the Profile page! 
+
+![image](https://user-images.githubusercontent.com/119984652/236646594-90c034fb-4d74-42f5-a60d-3f0fb04a568f.png)
+
+Moving on, we need to implement the uploading of our avatars to our web app. To get started on this, we need to install the AWS SDK for S3. From the terminal, we install it. 
+
+```sh
+npm i @aws-sdk/client-s3 --save
+```
+
+Next, we start a new function to `ProfileForm.js`.  
+
+```js
+const s3upload = async (event)=> {
+
+}
+```
+
+Then, we have to add an `onClick` event for this function.
+
+```js
+<div className="upload" onClick={s3upload}>
+  Upload Avatar
+</div>
+```
+
+API Gateway
