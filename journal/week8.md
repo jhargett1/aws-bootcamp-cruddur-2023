@@ -3324,4 +3324,134 @@ Then, we have to add an `onClick` event for this function.
 </div>
 ```
 
-API Gateway
+We're going to upload to our bucket through use of an API endpoint that will trigger a Lambda, so now we move over to the AWS Console and launch API Gateway. From here, we are prompted as to what type of API we would like to build.
+
+![image](https://user-images.githubusercontent.com/119984652/236677542-59ddc0a5-ffa7-44c2-b3e4-4868ea4b6e79.png)
+
+We select HTTP API, then we're prompted to configure our integrations. We choose a Lambda integration, but we do not have our Lambda function created yet. So we open an additional tab, and navigate to Lambda through the AWS console. Andrew mentions we can make this function in any language we want. Andrew's affinity for Ruby shines through, and we select Ruby as the Runtime for our newly named function, `CruddurAvatarUpload`. 
+
+![image](https://user-images.githubusercontent.com/119984652/236677913-d1d8eddd-2c4a-4e20-8019-88b3ec0f7f72.png)
+
+On permissions, we leave it with the option "Create a new role with basic Lambda permissions", as we'll create our own role. We leave all Advanced Settings unchecked.
+
+![image](https://user-images.githubusercontent.com/119984652/236678031-b3bbdd41-e4f7-4021-91a4-8f2b4cca8257.png)
+
+Then, we create our function. We want to generate out a presigned URL. The reason for this is a client will make a request to the API Gateway we're setting up. It requests a presigned URL for uploading an object, in our case, an image to S3. API Gateway will invoke the Lambda function, generating the presigned URL using the AWS SDK. Our Lambda function will return the presigned URL to the API, in turn returning it to the client as well. The client then uses the presigned URL to upload the image to our S3 bucket. 
+
+To have a place to work on our function, we create a new folder in our `./aws/lambdas` directory named `cruddur-upload-avatar`, then a new file within named `function.rb`. We first add code to initialize the client.
+
+```ruby
+require 'aws-sdk-s3'
+
+client = Aws::S3::Client.new()
+```
+
+Andrew explains we will next generate out a Gem file. A Gem file, or Gemfile, is a configuration file used in Ruby to specify the required Ruby gems (or libraries) for a Ruby project. 
+
+Further clarification per Google:
+"When you start a new Ruby project or work on an existing one, you may need to use external libraries or frameworks to add extra functionality to your project. RubyGems is a package manager that allows you to easily install and manage these libraries. A Gemfile is a text file that lists the required gems for a Ruby project, and specifies their version requirements."
+
+To generate out the Gemfile, we cd over to the correct directory in our terminal. `/workspace/aws-bootcamp-cruddur-2023/aws/lambdas/cruddur-upload-avatar/`. Next, we run a command to generate the Gemfile.
+
+```sh
+bundle init
+```
+
+![image](https://user-images.githubusercontent.com/119984652/236678688-8eba830a-44cc-4812-92c4-ed7bb0e7ba00.png)
+
+The Gemfile is generated.
+
+![image](https://user-images.githubusercontent.com/119984652/236678729-b482f3f4-fc7b-4314-a238-751c8bf610b3.png)
+
+We access the Gemfile created. Then, we add a library for "aws-sdk-s3".
+
+```gemfile
+# frozen_string_literal: true
+
+source "https://rubygems.org"
+
+# gem "rails"
+gem "aws-sdk-s3"
+```
+
+Next, we install the library from terminal.
+
+```sh
+bundle install
+```
+
+This installs from terminal.
+
+![image](https://user-images.githubusercontent.com/119984652/236678892-ed79312f-4fe6-446e-ac7b-2ca586bb7069.png)
+
+We can also see there's now a `Gemfile.lock` file in our directory. This file lists all of the versions of all the gems (or libraries) that are installed in the Ruby project (directory), along with their dependencies.
+
+![image](https://user-images.githubusercontent.com/119984652/236678908-d4e97f8a-20af-4d4a-a752-d355ee23b7c8.png)
+
+Next we must add code to return a presigned URL for upload to our function. While researching this, we find that we don't actually need to initialize the client. 
+
+```ruby
+require 'aws-sdk-s3'
+
+s3 = Aws::S3::Resource.new
+bucket_name = ENV["UPLOADS_BUCKET_NAME"]
+object_key = "mock.jpg"
+
+obj = s3.bucket(bucket_name).object(object_key)
+url = obj.presigned_url(:put, expires_in: 3600)
+puts url
+```
+
+We're going to be passing some env vars to our function that need to be stored in our workspace. We're generating some of the env vars in our `.env.example` file from our `./thumbing-serverless-cdk` directory, particularly `UPLOADS_BUCKET_NAME`, but they need to be accessible from the entire workspace, so we pass the env vars through our terminal in our workspace.  
+
+```sh
+export  UPLOADS_BUCKET_NAME="thejoshdev-uploaded-avatars"
+gp env UPLOADS_BUCKET_NAME="thejoshdev-uploaded-avatars"
+```
+
+We run our function from the terminal to see what is returning for `url`. 
+
+```sh
+bundle exec ruby function.rb
+```
+
+We receive a runtime error. We're missing an XML pareser:
+
+![image](https://user-images.githubusercontent.com/119984652/236680040-2194a53c-4da2-4d36-9a57-ee5e32a5dbcf.png)
+
+We go back to our `Gemfile` and edit the libraries to include Ox, which is an XML parser.
+
+```gemfile
+# frozen_string_literal: true
+
+source "https://rubygems.org"
+
+# gem "rails"
+gem "aws-sdk-s3"
+gem "ox"
+```
+
+We install the new library from our `Gemfile`. 
+
+```sh
+bundle install
+```
+
+The new library is installing.
+
+![image](https://user-images.githubusercontent.com/119984652/236680187-766056cd-269c-4edf-9bb5-400e17573dc7.png)
+
+We again try running our `function.rb` file.
+
+```sh
+bundle exec ruby function.rb
+```
+
+This time it runs and returns a presigned URL via the terminal.
+
+![image](https://user-images.githubusercontent.com/119984652/236680299-46aa4a9e-ac38-4f75-887f-0981ca3f902e.png)
+
+Andrew then shows us how to use an API client through our workspace in GitPod. We install a new client from the UI called Thunder Client. 
+
+![image](https://user-images.githubusercontent.com/119984652/236680433-5f329f42-439c-44bc-b994-b638126f02ff.png)
+
