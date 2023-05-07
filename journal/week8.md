@@ -3455,3 +3455,437 @@ Andrew then shows us how to use an API client through our workspace in GitPod. W
 
 ![image](https://user-images.githubusercontent.com/119984652/236680433-5f329f42-439c-44bc-b994-b638126f02ff.png)
 
+If we use the presigned URL that was generated and insert it into Thunder Client, it prepopulates our Query Parameters. 
+
+![image](https://user-images.githubusercontent.com/119984652/236692668-1897bbfb-3348-4433-b22f-37611ff67cf5.png)
+
+We need to see if we can upload to our S3 bucket using the API. We upload an image downloaded from the internet to our workspace in our `./aws/lambdas/cruddur-upload-avatar` directory. 
+
+![image](https://user-images.githubusercontent.com/119984652/236692794-d6cd9cd3-a85d-47e1-932e-0a14b5978ec5.png)
+
+Back in Thunder Client, we go to Body > Binary > Choose File > then select our `lore.jpg` file. We click Send, and receive a `403 Forbidden` error. 
+
+![image](https://user-images.githubusercontent.com/119984652/236692866-39eda895-9ee9-445d-8ab7-ae212b1d0748.png)
+
+With the error provided, it gives some insight: "Check your key and signing method." We go back to our `function.rb` file and view the `expires_in` parameter of our presigned url. 
+
+![image](https://user-images.githubusercontent.com/119984652/236692993-a31298aa-20c6-48c0-a5fc-d85c96317227.png)
+
+It's currently set to 3600 seconds or 1 hour. This should be sufficient time for the `lore.jpg` file to upload to our S3 bucket. We change the method of the request from Thunder Client to a `PUT`. Then, we try to Send again. 
+
+![image](https://user-images.githubusercontent.com/119984652/236693121-64b583a7-40a9-4dab-9d46-d8a5dcf322e7.png)
+
+This time it succeeds. We go back to S3 in AWS and check our `joshdev-uploaded-avatars` bucket. 
+
+![image](https://user-images.githubusercontent.com/119984652/236693171-e49b4042-de04-4550-aa20-e9fc71c815b0.png)
+
+The file uploaded successfully. After testing this and seeing it work, we delete the `mock.jpg` file from our bucket. Now we need to package our `function.rb` file into a Ruby Lambda. 
+
+```ruby
+require 'aws-sdk-s3'
+require 'json'
+
+def handler(event:, context:)
+  puts event
+  s3 = Aws::S3::Resource.new
+  bucket_name = ENV["UPLOADS_BUCKET_NAME"]
+  object_key = 'mock.jpg'
+  
+  obj = s3.bucket(bucket_name).object(object_key)
+  url = obj.presigned_url(:put, expires_in: 3600)
+  url # this is the data that will be returned
+  body = {url: url}.to_json
+  { statusCode: 200, body: body }
+end  
+```
+
+The added code added a Lambda function `handler` that takes two parameters: `event` and `context`. I learned from ChatGPT that `event` is a hash containing information about the event that triggered the Lambda function, and `context` is an object containing information about the current execution environment. The pre-signed URL is converted to a JSON string using the `to_json` method and assigned to the `body` variable.
+
+Finally, an HTTP response is returned with a `statusCode` of 200 (indicating success) and a `body` containing the pre-signed URL as a JSON string.
+
+We copy our code from `function.rb` and go back over to our Lambda we created. We select Code, then paste our code into the field. We click Deploy to deploy the code to our Lambda, then select Configuration > Permissions to check our Lambda's permissions. We select the execution role, which transfers us over to IAM in the AWS console. We create an inline policy named `PresignedUrlAvatarPolicy` granting our Lambda `s3:PutObject` permissions. This will give the Lambda permissions to upload images to our S3 bucket. 
+
+![image](https://user-images.githubusercontent.com/119984652/236694456-0da5110f-22d6-4c60-a863-2dcfd0b07dd0.png)
+
+Just so we have the code, we copy the JSON of the policy and create a new file in our workspace under the `./aws/policies` directory named `s3-upload-avatar-presigned-url-policy.json`. Then we paste the code into the file. We move back to our Lambda in AWS, as we need further configuration. We pass env vars in the Lambda function, so we need to store these for the Lambda. From the Configuration tab, we select Environment Variables > Edit. We add the env var for our `UPLOADS_BUCKET_NAME`.
+
+![image](https://user-images.githubusercontent.com/119984652/236694692-f33c4940-3b54-480c-96b4-eeff5d50dffb.png)
+
+We should be fully configured to test our Lambda. Prior to this though, we adjust the `expires_in` paramter of the presigned URL that's being generated to a shorter time period of five minutes. We make the update under the Code tab in our Lambda as well. 
+
+```ruby
+    url = obj.presigned_url(:put, expires_in: 60 * 5)
+```
+
+We test our Lambda from AWS and receive an error. 
+
+![image](https://user-images.githubusercontent.com/119984652/236694881-e42f0280-cc24-4f46-9a89-34179edb2e55.png)
+
+Andrew explains we did not set the handler from AWS. We go back to the Code tab and scroll down. Under Runtime Settings, we update Handler...
+
+...from this:
+
+![image](https://user-images.githubusercontent.com/119984652/236694969-c32f7c00-d550-4e8e-804c-03d8e6edaf3c.png)
+
+To this:
+
+![image](https://user-images.githubusercontent.com/119984652/236695014-8aca6f18-cd37-49dc-a4d0-63a041d72944.png)
+
+We test again and receive a new error.
+
+![image](https://user-images.githubusercontent.com/119984652/236695038-89465afc-f314-4cf3-9aa8-0e4c0345f668.png)
+
+Our file is named incorrectly in Lambda. From the Code tab, we rename the file to `function.rb`. We test again. This time, it succeeds.
+
+![image](https://user-images.githubusercontent.com/119984652/236695105-d7986cee-801e-4fb5-af26-d87200980bcf.png)
+
+The result returned was our presigned URL. This should work as intended. Andrew mentions we still will need an authorization Lambda before it calls this. For this, we decide to use `aws-jwt-verify`. We create a new directory and file in `./aws/lambdas/lambda-authorizer/index.js`. 
+
+```js
+"use strict";
+const { CognitoJwtVerifier } = require("aws-jwt-verify");
+//const { assertStringEquals } = require("aws-jwt-verify/assert");
+
+const jwtVerifier = CognitoJwtVerifier.create({
+  userPoolId: process.env.USER_POOL_ID,
+  tokenUse: "access",
+  clientId: process.env.CLIENT_ID//,
+  //customJwtCheck: ({ payload }) => {
+  //  assertStringEquals("e-mail", payload["email"], process.env.USER_EMAIL);
+  //},
+});
+
+exports.handler = async (event) => {
+  console.log("request:", JSON.stringify(event, undefined, 2));
+
+  const jwt = event.headers.authorization;
+  try {
+    const payload = await jwtVerifier.verify(jwt);
+    console.log("Access allowed. JWT payload:", payload);
+  } catch (err) {
+    console.error("Access forbidden:", err);
+    return {
+      isAuthorized: false,
+    };
+  }
+  return {
+    isAuthorized: true,
+  };
+};
+```
+
+This will need to get installed into the `package.json` so we cd over to the `./aws/lambdas/lambda-authorizer` directory, then run `npm install aws-jwt-verify --save`. This creates a `package-lock.json`and `package.json`files, as well as a `node_modules` folder. These files and folder store our dependencies for `aws-jwt-verify`.
+
+![image](https://user-images.githubusercontent.com/119984652/236696860-ad2dd182-606d-4799-9535-76498c5db392.png)
+
+We select all of the files in the `lambda-authorizer` directory and download them locally. We zip the contents of the files to a `.zip` folder named `lambda-authorizer`.  We navigate back over to Lambda in AWS. Here, we create a new Lambda named `CruddurApiGatewayLambdaAuthorizer`.
+
+![image](https://user-images.githubusercontent.com/119984652/236697132-37314c19-50d4-4309-9872-2d71f46573fe.png)
+
+We then upload the `.zip` folder we created locally. 
+
+![image](https://user-images.githubusercontent.com/119984652/236697198-11f5f3fe-3ba9-4008-b702-327645ef9c28.png)
+
+We shift gears back over to our API Gateway now. We move forward creating the API with a Lambda integration, now we can select our `CruddurAvatarUpload` Lambda that we created and give it an API name of `api.thejoshdev.com`. Next we configure the routes. We at first select a `GET` method, with the resource path being `/avatars/key_upload` and an integration target of `CruddurAvatarUpload`. Stages is set to `$default`. With the API created, we select Authorization. Then we create a new authorizer named `CruddurJWTAuthorizer` using our `lambda-authorizer` we created earlier. We then attach the authorizer to our route. 
+
+![image](https://user-images.githubusercontent.com/119984652/236697696-0ce56f22-b37d-4278-a45a-86150dc2bde5.png)
+
+We select Stages from the left hand menu, then copy our Invoke URL to test the API gateway. We open a new browser tab and paste the Invoke URL, adding the path `/avatars/key_upload` which is the route we defined for our API gateway. Since we're not passing authorization headers here, this shouldn't work, and it doesn't. 
+
+![image](https://user-images.githubusercontent.com/119984652/236697878-1ea9bfca-6035-4355-b53f-841c89204fd0.png)
+
+To see if the Lambda was triggered, we navigate over to the authorization Lambda we created, select the Monitor tab, then we viewed the CloudWatch logs. The log group didn't exist, so that means the Lambda did not trigger. Just as previously thought, it's likely due to the fact that we're not passing those authorization headers. Since we are passing those headers in our `./frontend-react-js/src/components/ProfileForm.js` file, we navigate over there and begin implementing an HTTP request for our API by continuing back to work on the `s3upload` function we were working on earlier. We add the invoke URL from our API gateway as well. 
+
+```js
+const s3upload = async (event)=> {
+  try {
+    const backend_url = "https://clbx5fa2yb.execute-api-us-east-1.amazonaws.com/avatars/key_upload"
+    await getAccessToken()
+    const access_token = localStorage.getItem("access_token")
+    const res = await fetch(backend_url, {
+      method: "POST",
+      headers: {
+        'Authorization': 'Bearer ${access_token}',
+        'Accept': 'application/json',
+        'Content-Type': 'application/json'
+      }})
+```
+
+While working on this code, we got to the method and Andrew thought we should change the method of our route in our API gateway, so we open it up in the AWS console again. We then edit the route and change it to a `POST`. We then go back to our code.
+
+We open up `ProfileForm.css` and add some styling just to see what we're doing while working through the new `s3upload` function. 
+
+![image](https://user-images.githubusercontent.com/119984652/236698997-4b908789-888c-4076-ad29-e6d91bd5f71e.png)
+
+We move back over to our web app and refresh. We again select `Edit Profile`. 
+
+![image](https://user-images.githubusercontent.com/119984652/236699037-89f6b54e-bf23-49a8-9d56-89c6c9c0800f.png)
+
+When we click into it, we view the web app through Inspect in the browser. We're getting a `failed to fetch` error.
+
+![image](https://user-images.githubusercontent.com/119984652/236699106-583df9d7-7392-4e5d-aa2f-f068f12f5378.png)
+
+When we view `key_uploads`, the route to our API gateway through Inspect, it's returning a 404 error. 
+
+![image](https://user-images.githubusercontent.com/119984652/236699155-6279d127-738a-4463-a4d1-84af1b48c824.png)
+
+As it so happens, this is a CORS issue. The `OPTIONS` request method that we're receiving a 404 error on is primarily used in combination with CORS. When a client makes a cross-origin request, the browser sends an `OPTIONS` preflight request to the server to determine if the requested resource is allowed to be accessed from the client's domain. The server responds with the appropriate CORS headers that allow or deny the request. In our case, it's denying it. 
+
+We head back over to our API gateway in AWS and select CORS from the left hand menu. We then configure CORS setting the `Access-Control-Allow-Origin` to `*.gitpod.io` and setting our `Access-Control-Allow-Methods` to `POST` and `OPTIONS`. 
+
+![image](https://user-images.githubusercontent.com/119984652/236699736-58559842-8ab6-4971-8262-72cd28d7d114.png)
+
+One more refresh of our web app, then clicking on Upload Avatar. We're still getting a CORS error. 
+
+![image](https://user-images.githubusercontent.com/119984652/236699979-c48385cb-52c0-4275-b787-0ed6ffd77a49.png)
+
+There is however, one route that returns a 204 for `OPTIONS`. 
+
+![image](https://user-images.githubusercontent.com/119984652/236699840-368ea7b4-3b5a-4d2c-b319-b84bf6e9ac60.png)
+
+We further configure CORS in API Gateway, for testing purposes opening CORS up entirely.
+
+![image](https://user-images.githubusercontent.com/119984652/236700260-c84e5fc1-bc39-4c28-959b-f17e080f60ea.png)
+
+We test the web app again. Still having CORS errors.
+
+![image](https://user-images.githubusercontent.com/119984652/236700312-ad3f2d42-0889-460d-b15c-cf7dfdf1ae31.png)
+
+For now, we're putting this on pause. Instead, we decide to go back to implenting our presigned URL. In our `./frontend-react-js/src/components/ProfileForm.js` file, we have the function named `s3upload`. This function contains our `backend_url`. We rename the function to `s3uploadkey`. We then update the `div` where it's implemented.
+
+![image](https://user-images.githubusercontent.com/119984652/236700763-51d2e770-e007-47a6-9a76-2a9cbb3ee6a6.png)
+
+Then, we copy the `div` and pass another function named `s3upload`. 
+
+![image](https://user-images.githubusercontent.com/119984652/236700805-9044c5ad-ee89-4686-9352-baa2617d5d0d.png)
+
+One function will be the upload itself, the other the actual presigned URL. We copy the function code for `s3uploadkey` and paste into `ProfileForm.js` naming the function `s3upload`. Next, before we edit the code, we must remove the `div` we created for `s3upload` previously and add an `input type` instead.
+
+![image](https://user-images.githubusercontent.com/119984652/236700983-4d81b3f1-d1b0-42a7-b9c3-31f2d5b6b573.png)
+
+We go back to the code for `s3upload` and begin editing it. 
+
+```js
+  const s3upload = async (event)=> {
+    const file = event.target.files[0]
+    filename = file.name
+    size = file.size
+    type = file.type
+    const preview_image_url = URL.createObjectURL(file)
+    console.log(filename,size,type)
+    try {
+      console.log('s3upload')
+      const backend_url = ""
+      const res = await fetch (backend_url, {
+        method: "POST",
+        headers: {
+          'Accept': 'appplication/json',
+          'Content-Type': 'application/json'
+      }})
+```
+
+We want the function to pass binary data to fetch, so we ask ChatGPT for some generated code. We further verify to pass a file in js. ChatGPT replies back letting us know "to pass a file to the `fetch` function in Javascript, you can use the `FormData` object to create a form with a file input and submit it as a `POST` request." We implement the suggestion.
+
+![image](https://user-images.githubusercontent.com/119984652/236701485-6c6ba0e0-88b8-497c-a398-487920b8d8ed.png)
+
+Next, we update our `function.rb` file to include a `puts` at the end of the function so we can view when this is ran. We don't want to commit this to our Lambda in AWS, as we're just doing this for troubleshooting purposes at the moment. 
+
+![image](https://user-images.githubusercontent.com/119984652/236701797-86cbee11-270e-491f-91e0-866c226c0628.png)
+
+We select another terminal tab and cd over to our `aws/lambdas/cruddur-upload-avatar` directory, then run our `function.rb`. 
+
+```sh
+bundle exec ruby function.rb
+```
+
+In Andrew's example below, you can see it returned a presigned URL.
+
+![image](https://user-images.githubusercontent.com/119984652/236701877-69a46bed-f0ef-4c9d-8c33-59e724806df7.png)
+
+We copy the presigned URL, then paste it as the value for `backend_url` back over in `ProfileForm.js` in our `s3upload` function.
+
+![image](https://user-images.githubusercontent.com/119984652/236701951-864c1ed5-2000-4187-b6f9-5cd229d3570a.png)
+
+We go back to our web app, refresh the page, select the `Edit Profile` button, and we now have a `Choose File` button to upload.
+
+![image](https://user-images.githubusercontent.com/119984652/236702015-6367672e-6c6f-488d-a689-028abd04f495.png)
+
+We select our file to upload, then view Inspect in our browser.
+
+![image](https://user-images.githubusercontent.com/119984652/236702098-fe4b884f-6211-4b88-ad61-473f18852cb1.png)
+
+We need to add `const` to several of our variables in `ProfileForm.js` on `s3upload`.
+
+```js
+  const s3upload = async (event)=> {
+    const file = event.target.files[0]
+    const filename = file.name
+    const size = file.size
+    const type = file.type
+    const preview_image_url = URL.createObjectURL(file)
+    console.log(filename,size,type)
+```
+
+We refresh our web app once again, attempt to upload once again, and this time, we come back with a CORS error.
+
+![image](https://user-images.githubusercontent.com/119984652/236702290-75d67f16-b3fd-4947-8f6f-617c88e34d29.png)
+
+We also got a 403 on preflight, so just to rule that out, we generate out a new presigned URL by running `function.rb` again from the terminal.
+
+```sh
+bundle exec ruby function.rb
+```
+
+We again copy/paste the URL into `s3upload` as the value passed to `backend_url`. We again refresh our web app, then attempt an upload. This time, we return the same results from Inspect in our browser. More CORS errors. Andrew begins to think we might not need the `FormData` object. We remove this from our code, and also update the fetch method on `body` to `file`. 
+
+![image](https://user-images.githubusercontent.com/119984652/236702615-782abb82-8580-4748-a635-10efcdba554e.png)
+
+When we refresh our web app and attempt the upload again, we again receive the CORS error and the 403 on preflight. Back in `ProfileForm.js`, we update `s3upload` further by changing the method to `PUT`, removing the `'Accept'` from the headers being passed, and updated the `'Content-Type'` header to `type`.
+
+![image](https://user-images.githubusercontent.com/119984652/236702763-8802808c-5400-4b69-8850-a6e32a540633.png)
+
+Refreshed our web app, then attempted another upload avatar: more CORS errors! We're now getting CORS errors from both the frontend and backend of our application. 
+
+In our next instructional video, Andrew opens letting us know that a fellow bootcamper has solved the scripting issues we were having previously within our `.gitpod.yml` file. 
+
+![image](https://user-images.githubusercontent.com/119984652/236703052-2b21f877-7b82-4493-b6d2-8522ef0f8ce8.png)
+
+We move over to `.gitpod.yml` and update the file:
+
+```yml
+tasks:
+  - name: aws-cli
+    env:
+      AWS_CLI_AUTO_PROMPT: on-partial
+    before: |
+      cd /workspace
+      curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+      unzip awscliv2.zip
+      sudo ./aws/install
+      cd $THEIA_WORKSPACE_ROOT
+      bash bin/ecr/login
+```
+
+There was another fix found for our `generate-env` scripts found. 
+
+![image](https://user-images.githubusercontent.com/119984652/236703195-a56a85eb-63da-48b2-ba15-fdce394a7a84.png)
+
+We also update `.gitpod.yml` with this change as well:
+
+```yml
+  - name: flask 
+    command: |
+      ruby "$THEIA_WORKSPACE_ROOT/bin/backend/generate-env"
+      cd backend-flask
+      pip install -r requirements.txt
+  - name: react-js
+    command: |
+      ruby "$THEIA_WORKSPACE_ROOT/bin/frontend/generate-env"
+      cd frontend-react-js
+      npm i         
+```
+
+Moving on, we now have a fix for our CORS issue with our API Gateway. We go back over to API Gateway in the AWS console. An additional route is needed to be added.
+
+![image](https://user-images.githubusercontent.com/119984652/236703368-51e459d3-ba60-4989-8fe3-37b3b5e7b557.png)
+
+There is no authorizer attached to this route. CORS also needs to be updated.
+
+![image](https://user-images.githubusercontent.com/119984652/236703465-2280f4fa-c0c6-4f79-a009-6ed034cebfeb.png)
+
+Now we must pass our headers as part of our Lambda. We navigate through AWS over to Lambda and access our upload Lambda.
+
+```ruby
+require 'aws-sdk-s3'
+require 'json'
+
+def handler(event:, context:)
+  puts event
+  s3 = Aws::S3::Resource.new
+  bucket_name = ENV["UPLOADS_BUCKET_NAME"]
+  object_key = 'mock.jpg'
+  
+  obj = s3.bucket(bucket_name).object(object_key)
+  url = obj.presigned_url(:put, expires_in: 60 * 5)
+  url # this is the data that will be returned
+  body = {url: url}.to_json
+  {
+    headers: {
+      "Access-Control-Allow-Headers": "*, Authorization",
+      "Access-Control-Allow-Origin": "https://3000-jhargett1-awsbootcampcru-em6b96761ns.ws-us93.gitpod.io",
+      "Access-Control-Allow-Methods": "OPTIONS,GET,POST"
+    },
+    statusCode: 200,
+    body: body
+    
+  }
+end 
+```
+
+The `"Access-Control-Allow-Origin"` header will have to be updated every time we spin up our environment through our workspace. We deploy the changes to our code in our Lambda. We then refresh our web app. Andrew is starting from a new environment, so he's having to run our various scripts to get data running to our web app. During this, he forgets to run the migrations script we created and has the great idea to add it to our `./bin/db/setup` script as well. 
+
+```sh
+#! /usr/bin/bash
+set -e # stop if it fails at any point
+
+CYAN='\033[1;36m'
+NO_COLOR='\033[0m'
+LABEL="db-setup"
+printf "${CYAN}==== ${LABEL}${NO_COLOR}\n"
+
+ABS_PATH=$(readlink -f "$0")
+DB_PATH=$(dirname $ABS_PATH)
+
+source "$DB_PATH/drop"
+source "$DB_PATH/create"
+source "$DB_PATH/schema-load"
+source "$DB_PATH/seed"
+python "$DB_PATH/update_cognito_user_ids"
+python "$DB_PATH/migrate"
+```
+
+From our web app, we again test the upload avatar.
+
+![image](https://user-images.githubusercontent.com/119984652/236704192-daaf28b7-0192-4128-bb05-7ec093cf14fc.png)
+
+This is occurring because we're not passing along the origin in our headers. Back in `s3uploadkey` in our `ProfileForm.js` file, we add the origin to our headers.
+
+```js
+      const res = await fetch(gateway_url, {
+        method: "POST",
+        body: JSON.stringify(json),
+        headers: {
+          'Origin': "https://3000-jhargett1-awsbootcampcru-em6b96761ns.ws-us93.gitpod.io",
+          'Authorization': `Bearer ${access_token}`,
+          'Accept': 'application/json',
+          'Content-Type': 'application/json'
+        }
+```
+
+We refresh our web app and try the upload avatar again. This time we get 200 statuses.
+
+![image](https://user-images.githubusercontent.com/119984652/236704870-ea882c45-3eab-43e0-81e0-a6db64ca09cc.png)
+
+We also return the presigned URL. We move back to our code and pass when successful.
+
+![image](https://user-images.githubusercontent.com/119984652/236704983-80d9aab8-5124-4e0a-962b-8e98846c8a1a.png)
+
+From there, we edit `s3upload` to pass that value.
+
+![image](https://user-images.githubusercontent.com/119984652/236705099-9446d5fc-e26f-4f43-b2a4-f3607cd761ba.png)
+
+We then want to return that data.
+
+![image](https://user-images.githubusercontent.com/119984652/236705172-4332cbf6-e672-4429-9787-3420d08b12e5.png)
+
+Then, in `s3upload`, we assign `presignedurl` to wait for `s3uploadkey` to complete.
+
+![image](https://user-images.githubusercontent.com/119984652/236705316-a5eb9cb5-9b10-4938-9801-ccc949696e5b.png)
+
+We know that we're passing the presigned URL, so we remove the `div` for this from `ProfileForm.js`. We again refresh our web app, then try to upload an image. We're still getting the CORS errors.
+
+![image](https://user-images.githubusercontent.com/119984652/236705441-0be91eb0-a0f4-4298-8f7f-824fe8d5fa04.png)
+
+We're getting closer to resolving the issue. We move now to variable for `backend_url` and how we're passing the `Origin` header in our `s3uploadkey` function in `ProfileForm.js`. Currently the values are hard coded. To solve this, we will need to get our custom domain going for API Gateway. We already have `api.thejoshdev.com` for our load balancer, but we need to use it for API Gateway as well.  Andrew is thinking we'll be able to point our load balancer to our API Gateway for any requests needed. Certain prefixes can go to API Gateway, the rest can go to AWS Fargate. We setup a custom domain for API Gateway. 
+
+![image](https://user-images.githubusercontent.com/119984652/236705805-7049db5f-97a6-4fc7-a961-d555ed162b20.png)
