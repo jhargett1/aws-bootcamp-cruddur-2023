@@ -3889,3 +3889,128 @@ We know that we're passing the presigned URL, so we remove the `div` for this fr
 We're getting closer to resolving the issue. We move now to variable for `backend_url` and how we're passing the `Origin` header in our `s3uploadkey` function in `ProfileForm.js`. Currently the values are hard coded. To solve this, we will need to get our custom domain going for API Gateway. We already have `api.thejoshdev.com` for our load balancer, but we need to use it for API Gateway as well.  Andrew is thinking we'll be able to point our load balancer to our API Gateway for any requests needed. Certain prefixes can go to API Gateway, the rest can go to AWS Fargate. We setup a custom domain for API Gateway. 
 
 ![image](https://user-images.githubusercontent.com/119984652/236705805-7049db5f-97a6-4fc7-a961-d555ed162b20.png)
+
+At the start of another instructional video, we may now know the solution to why we were having problems with uploading to the S3 bucket. We head back over to our `thejoshdev-uploaded-avatars` S3 bucket in AWS. Under the Permissions tab, we write a CORS configuration in JSON format.
+
+![image](https://user-images.githubusercontent.com/119984652/236943462-8cd44e42-7535-4815-8a1d-9785cf371711.png)
+
+We also copy this to our workspace so we have it just in case. We make a new directory and file for it at `./aws/s3/cors.json`. 
+
+```json
+[
+    {
+        "AllowedHeaders": [
+            "*"
+        ],
+        "AllowedMethods": [
+            "PUT"
+        ],
+        "AllowedOrigins": [
+            "https://*.gitpod.io"
+        ],
+        "ExposeHeaders": [
+            "x-amz-server-side-encryption",
+            "x-amz-request-id",
+            "x-amz-id-2"
+        ],
+        "MaxAgeSeconds": 3000
+    }
+]
+```
+
+Back in our workspace, we start up a fresh environment with a Docker compose up. We then run our various scripts to get data to our web app. We run into a snag during running of our scripts, as we have to make a slight edit to `./bin/db/setup` as the path command for running `./bin/db/migrate` was incorrect. Since it's a Python script, we must alter the command.
+
+```sh
+python "$DB_PATH/migrate"
+```
+
+That fixes the script and we continue on. With our web app receiving data and the environment launched, we login to our web app. We head back over to the Profile page, then click the `Edit Profile` button. Before attempting to upload, we go back over to our workspace and access our `ProfileForm.js` file. Our values passed for the `Origin` header may have updated since we reloaded a new environment. Since we don't want to have to update this every time we start a new environment, we would like to update this automatically. We search through our `ProfileForm.js` and find our `onsubmit` function. It's passing `backend_url` with a value of `'${process.env.REACT_APP_BACKEND_URL}/api/profile/update'`. 
+
+![image](https://user-images.githubusercontent.com/119984652/236948499-57603234-2f9c-4b89-aa23-670eafaf9c1e.png)
+
+The env var being passed, `REACT_APP_BACKEND_URL`, we head over to our `frontend-react-js/.env.example` file and note the value passed for it for later. 
+
+```.env
+REACT_APP_BACKEND_URL="https://4567-${GITPOD_WORKSPACE_ID}.${GITPOD_WORKSPACE_CLUSTER_HOST}"
+```
+
+Back over in `ProfileForm.js`, Andrew thinks twice of passing the `Origin` header in our `s3uploadkey` function, and instead opts to try setting the mode of our fetch request to CORS. 
+
+![image](https://user-images.githubusercontent.com/119984652/236950506-a9366553-705f-4a6d-8da0-298bc93900a4.png)
+
+We head back over to our web app and refresh the page, the test uploading an image. From Inspect in our browser, we're now getting a 404 error undefined on our `PUT`. 
+
+![image](https://user-images.githubusercontent.com/119984652/236951005-74f2a8bb-72a8-46ae-b601-77a55d39529e.png)
+
+We revert the change in `ProfileForm.js` and pass the `Origin` header once again. But we update it as we were doing previously, using the new env var we added.
+
+```js
+        headers: {
+          'Origin': process.env.REACT_APP_FRONTEND_URL,
+          'Authorization': `Bearer ${access_token}`,
+          'Accept': 'application/json',
+          'Content-Type': 'application/json'
+        }
+```
+
+We also add env vars to our `./erb/frontend-react-js.env.erb` file for our frontend as well as `backend_url` variable, which if you remember, is our invoke URL for our API Gateway. 
+
+```sh
+REACT_APP_BACKEND_URL=https://4567-<%= ENV['GITPOD_WORKSPACE_ID'] %>.<%= ENV['GITPOD_WORKSPACE_CLUSTER_HOST'] %>
+REACT_APP_FRONTEND_URL=https://3000-<%= ENV['GITPOD_WORKSPACE_ID'] %>.<%= ENV['GITPOD_WORKSPACE_CLUSTER_HOST'] %>
+REACT_APP_API_GATEWAY_ENDPOINT_URL=https://999999999.execute-api.us-east-1.amazonaws.com
+```
+
+Then we update the string path given for `backend_url`. 
+
+```js
+const backend_url = '${process.env.REACT_APP_API_GATEWAY_ENDPOINT_URL}/avatars/key_upload'
+```
+
+We re-generate our frontend env vars by rerunning our script to do so.
+
+```sh
+./bin/frontend/generate-env
+```
+
+With new env vars to load, we compose down our environment, then Docker compose up again. In our fresh environemnt from our web app, we log back in. The head back over to our Profile page again and test uploading an image. From Inspect, we're getting a Warning, and we've just cleared a lot of `console.log`'s from our code to try and clean up what we're seeing here. 
+
+![image](https://user-images.githubusercontent.com/119984652/236955591-bca36c22-6f94-4db5-9a6c-e7039f2baf84.png)
+
+We head back over to our workspace in `ProfileForm.js` and heed the suggestion.
+
+```js
+export default function ProfileForm(props) {
+  const [bio, setBio] = React.useState('');
+  const [displayName, setDisplayName] = React.useState('');
+```
+
+From what I gather, if the `bio` and `displayName` variables will be used to store text input from the user, it is more appropriate to initialize them with an empty string rather than with what we were using before, which was `0`. This is because `0` is a numerical value, and if the values of `bio` and `displayName` are expected to be strings, then initializing them to `0` could cause issues later on in the code.
+
+We then update the `React.useEffect` hook as well:
+
+```js
+  React.useEffect(()=>{
+    setBio(props.profile.bio || '');
+    setDisplayName(props.profile.display_name);
+  }, [props.profile])
+```
+
+Adding the `|| ''` expression is a fallback incase `bio` is undefined or null. It sets the value of `bio` to an empty string `''`. 
+
+We refresh our web app and click `Edit Profile` button again. This time there's no warnings. We proceed with attempting to upload an image. We're again getting a CORS error on our fetch.
+
+![image](https://user-images.githubusercontent.com/119984652/236956754-964556c9-1ac7-484a-9b2a-3412eb52fc42.png)
+
+We head back over to Lambda in AWS and view our upload Lambda. We update the `Access-Control-Allow-Origin` header, as our workspace URL has changed. Then we deploy the change. Next, just to make things a little clearer, we update the `backend_url` variable set in `ProfileForm.js` to `gateway_url` instead. 
+
+![image](https://user-images.githubusercontent.com/119984652/236958174-ed6d8680-8052-429c-baad-36505e5b5837.png)
+
+We again refresh our web app and attempt to upload an image. We're now getting a `SyntaxError: Unexpected end of JSON input at s3upload` error. 
+
+![image](https://user-images.githubusercontent.com/119984652/236958750-0cace2c2-5c51-4eef-b493-6f1c3d48f049.png)
+
+We add a `console.log` to see what we're getting for a response. We should be getting back our `gateway_url` and our headers. We refresh our web app and go through the process again. Looking at Inspect in our browser, it looks like we're getting what we're supposed to be getting.
+
+![image](https://user-images.githubusercontent.com/119984652/236959238-c80e88ea-add9-400b-a223-a4ac41661cd6.png)
+
