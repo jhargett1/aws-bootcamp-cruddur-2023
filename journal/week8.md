@@ -4010,7 +4010,258 @@ We again refresh our web app and attempt to upload an image. We're now getting a
 
 ![image](https://user-images.githubusercontent.com/119984652/236958750-0cace2c2-5c51-4eef-b493-6f1c3d48f049.png)
 
-We add a `console.log` to see what we're getting for a response. We should be getting back our `gateway_url` and our headers. We refresh our web app and go through the process again. Looking at Inspect in our browser, it looks like we're getting what we're supposed to be getting.
+We add a `console.log` to see what we're getting for a response. We should be getting back our our headers. We refresh our web app and go through the process again. Looking at Inspect in our browser, it looks like we're getting what we're supposed to be getting.
 
 ![image](https://user-images.githubusercontent.com/119984652/236959238-c80e88ea-add9-400b-a223-a4ac41661cd6.png)
 
+There's no errors, but we're not getting back what we're looking for. Back in our code for `ProfileForm.js`, we add a couple `console.log`'s for a response on our `s3upload` function and to see what we're getting for our body. 
+
+![image](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/2e2f01b3-60c9-4d41-abdc-a963bc7a1317)
+
+After we refresh our web app again, then test the upload, we again view Inspect to see what we're getting back. We're getting back a `ReadableStream`. 
+
+![image](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/1f89054f-2a52-43ff-9eec-035e89f3c565)
+
+Some more info on `ReadableStream` from ChatGPT:
+
+![image](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/8282a06c-c773-4d8e-94ee-8af5b204da22)
+
+We clean up our code in `ProfileForm.js`, then shift our direction to our upload Lambda. Currently, we're passing the name of the image to be uploaded as a hardcoded value.
+
+![image](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/6346eba6-8778-4c15-b55e-c8d892933c1a)
+
+Since we're already passing this information during the upload, Andrew suggests he'd like the image name to instead be whatever the Cognito User ID is. We begin updating the Lambda. Since we're now passing data in our Lambda, we view our `s3uploadkey` function in `ProfileForm.js`. We decide to try passing some `body: JSON.stringify(json)` data. This will take the value of `json` and convert it into a JSON string representation. We then add our variable for `json`. 
+
+```js
+      const json = {
+        extension: "",
+        cognito_user_uuid: ""
+      }
+      const res = await fetch(gateway_url, {
+        method: "POST",
+        body: JSON.stringify(json),
+        headers: {
+          'Origin': process.env.REACT_APP_FRONTEND_URL,
+          'Authorization': `Bearer ${access_token}`,
+          'Accept': 'application/json',
+          'Content-Type': 'application/json'
+        }
+      })
+```
+
+Next, for `s3upload`, we pass `extension` and `cognito_user_uuid` to the await for `s3uploadkey`. That will erturn a value for `presignedurl`
+
+```js
+const presignedurl = await s3uploadkey(extension, cognito_user_uuid)
+```
+
+Then to remove the file extension of the file being uploaded, we define variables for `fileparts` and `extension`. 
+
+```js
+    const fileparts = filename.split('.')
+    const extension = fileparts[fileparts.length-1]
+```
+
+Initially the plan to rename the image to whatever the Congito User ID is was predicated on the idea that we would have that information from the `jwt-verify` process. This isn't going to be the case. We begin talking about how to get that information, and Andrew navigates to his Cloudwatch logs for the upload Lambda to show us.  
+
+![image](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/e42f9380-611d-4b6c-afb6-9082dfe7497f)
+
+Our routes for API Gateway are both running when the upload Lambda is triggered. Andrew explains all `OPTIONS` needs to do is return the CORS data. What this means is we're likely generating the presigned URL twice. We can either create another Lambda to handle CORS, or add conditional code to our upload Lambda function to handle the CORS. We decide to implement the conditional code to the upload Lambda. We need to pass data from the authorizer Lambda from API Gateway to our upload Lambda. We find after asking ChatGPT for suggestions that we could use the Context Object. 
+
+It reads:
+"When invoking the target lambda function, you can pass an additional context object as a parameter. The authorizer function ncan add the authorization information to this object, and the target function can access it using the 'context' parameter. This approach is useful when you want to pass more complex data structures or multiple values."
+
+We move over to the upload Lambda and view the code through AWS. We already have `context` as a parameter, so we add a `puts` for it to print the values to the console. 
+
+```rb
+def handler(event:, context:)
+  puts "Context"
+  puts context
+  puts "Event"
+  puts event
+```
+
+We deploy the change to our Lambda. We move back over to our web app and refresh. We trigger the Lambda function by testing the upload again. We view Inspect. There's something wrong with our `presignedurl`. 
+
+![image](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/42322d10-3106-44e2-b351-e273354c3a35)
+
+We head back over to `ProfileForm.js`. We view our `s3uploadkey` where we were previously attempting to pass data. We need to pass `extension`, so we add it as a parameter to `s3uploadkey`. We also modify the `extension` property of `json` and stop passing `cognito_user_uuid` by removing it from the code. Then, we `console.log` out our `extension` to make sure it's returning our file extension as intended. 
+
+```js
+  const s3uploadkey = async (extension)=> {
+    console.log('ext',extension)
+    try {
+      const gateway_url = `${process.env.REACT_APP_API_GATEWAY_ENDPOINT_URL}/avatars/key_upload`
+      await getAccessToken()
+      const access_token = localStorage.getItem("access_token")
+      const json = {
+        extension: extension
+      }
+```
+
+This time when we refresh our web app and inspect, we're getting back our extension.
+
+![image](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/a51c6d3b-f642-437c-ba7d-14f5c1fd4b3d)
+
+We head back over to CloudWatch to view the logs of the upload Lambda. We're now getting back our `context` that we added a `put` for in our authorizer Lambda earlier. 
+
+![image](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/f754fc8b-c5b0-4c12-af5f-f7a95e953ce3)
+
+We do a bit of research on `LambdaContext` and find that we should be able to get the Cognito user ID by adding the `identity` property to our `context` parameter. We make the change to our Lambda function.
+
+```rb
+def handler(event:, context:)
+  puts "Context Identity"
+  puts context.identity
+  puts context.identity.inspect
+  puts "Event"
+  puts event
+```
+
+We deploy the change and test it by refreshing our web app and testing the upload. Then, we view the CloudWatch logs.
+
+![image](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/7b6e3b84-8005-49cb-bf1e-3a01add684b7)
+
+It's returning `nil`. Andrew believes this is likely because the property could be talking about identity pools in Cognito, not user pools. We change our approach and try another suggestion from ChatGPT: using the Lambda Proxy Integration. The authorizer Lambda can return a JSON response that includes an "Authorization" key-value pair in the header object. The upload Lambda can then access this information from the event object's "header's" property. We begin implementing the changes to our upload Lambda via our workspace.
+
+```rb
+def handler(event:, context:)
+  puts event
+  # return cors headers for preflight check
+  if event['routeKey'] == "OPTIONS /{proxy+}"
+    puts({step: 'preflight', message: 'preflight CORS check'}.to_json)
+    { 
+      headers: {
+        "Access-Control-Allow-Headers": "*, Authorization",
+        "Access-Control-Allow-Origin": "https://3000-jhargett1-awsbootcampcru-2n1d6e0bd1f.ws-us94.gitpod.io",
+        "Access-Control-Allow-Methods": "OPTIONS,GET,POST"
+      },
+      statusCode: 200
+    }
+```
+
+In this first section, the function checks if the HTTP request method is `OPTIONS` and the route is `/proxy+`. If so, it returns a set of CORS headers as a response for a preflight CORS check. The returned headers allow access to our API Gateway. 
+
+We work through several syntax errors, refreshing our web app, testing the upload, then viewing the CloudWatch logs each time. Eventually, there's no more syntax errors, instead Andrew receives this error:
+
+![image](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/81fffc92-3099-43c2-8a2a-2a16a2ca6712)
+
+At this point, I'm not receiving the same errors Andrew is, but more on that later. I continue on with instruction. This error indicates that the `jwt` module isn't found. We go over to our `./aws/lambdas/cruddur-upload-avatars/Gemfile` and add the dependency:
+
+```Gemfile
+gem "jwt"
+```
+
+We cd over to the directory, then run a `bundle install` from the terminal. 
+
+![image](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/a5bd2687-6bff-47f0-8288-6687195ceecb)
+
+Just as we did with our authorizer Lambda previously, we download the contents of our `./aws/lambdas/cruddur-upload-avatars` directory locally, then zip the files. Next we move back over to our upload Lambda in AWS and upload a `.zip` file. 
+
+![image](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/fd93da9e-8ef6-4110-87a7-4570e4e7aa75)
+
+Our next testing of this from our web app completes and we go back to CloudWatch to view the logs again. Once again, we're receiving the `"Cannot load such file -- jwt"` error. We decide to implement a Lambda layer to install this dependency since this is not working. We create a new directory in our `./bin` folder named `lambda-layers`, then a new script therein named `ruby-jwt`. 
+
+```sh
+#! /usr/bin/bash
+
+gem i jwt -Ni /tmp/lambda-layers/ruby-jwt/ruby/gems/2.7.0
+cd /tmp/lambda-layers/ruby-jwt
+
+zip -r lambda-layers . -x ".*" -x "*/.*"
+zipinfo -t lambda-layers
+
+aws lambda publish-layer-version \
+    --layer-name jwt \
+    --description "Lambda Layer for JWT" \
+    --license-info "MIT" \
+    --zip-file fileb://lambda-layers.zip \
+    --compatible-runtimes ruby2.7
+```
+
+In the script above, we are installing the `gem` for `jwt` to the `/tmp/lambda-layers/ruby-jwt/ruby/gems/2.7.0`  temporary directory. We then cd over to the `/tmp/lambda-layers/ruby-jwt` directory, zip the directory and its contents, excluding hidden files and directories. Then the integrity of the zip folder is checked. Finally, we use the `aws lambda publish-layer-version` command to create our Lambda layer named `jwt` and passing the `.zip` file we just created as the code for the layer. 
+
+We run the script.
+
+```sh
+./bin/lambda-layers/ruby-jwt
+```
+
+The script completes, so we head back over to our upload Lambda in AWS. From our upload Lambda, we scroll down on the Code tab and find Lambda Layers. We add a new layer, select Custom Layers, then select our `jwt` layer we just created.
+
+![image](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/ad308a65-e03c-4d01-9d5a-3ed4768ab97a)
+
+We add the layer, then deploy the Lambda. Next, we head back over to our web app and refresh, then test the upload again. Now, we head back to CloudWatch to view the logs. Andrew's logs return the `presignedurl` and `access_token`. His works. Mine again, does not. But again, I press on with instruction. With the Lambda working correctly now for Andrew, the `access_token` is now decoded, and we have our `sub` which is the Cognito User ID. We can now use this as the identifier for our avatar. We move back over to our workspace to continue updating our upload Lambda. 
+
+```rb
+require 'aws-sdk-s3'
+require 'json'
+require 'jwt'
+
+def handler(event:, context:)
+  puts event
+  # return cors headers for preflight check
+  if event['routeKey'] == "OPTIONS /{proxy+}"
+    puts({step: 'preflight', message: 'preflight CORS check'}.to_json)
+    { 
+      headers: {
+        "Access-Control-Allow-Headers": "*, Authorization",
+        "Access-Control-Allow-Origin": "https://3000-omenking-awsbootcampcru-2n1d6e0bd1f.ws-us94.gitpod.io",
+        "Access-Control-Allow-Methods": "OPTIONS,GET,POST"
+      },
+      statusCode: 200
+    }
+  else
+    token = event['headers']['authorization'].split(' ')[1]
+    puts({step: 'presignedurl', access_token: token}.to_json)
+
+    body_hash = JSON.parse(event["body"])
+    extension = body_hash["extension"]
+
+    decoded_token = JWT.decode token, nil, false
+    cognito_user_uuid = decoded_token[0]['sub']
+
+    s3 = Aws::S3::Resource.new
+    bucket_name = ENV["UPLOADS_BUCKET_NAME"]
+    object_key = "#{cognito_user_uuid}.#{extension}"
+
+    puts({object_key: object_key}.to_json)
+
+    obj = s3.bucket(bucket_name).object(object_key)
+    url = obj.presigned_url(:put, expires_in: 60 * 5)
+    url # this is the data that will be returned
+    body = {url: url}.to_json
+    { 
+      headers: {
+        "Access-Control-Allow-Headers": "*, Authorization",
+        "Access-Control-Allow-Origin": "https://3000-jhargett1-awsbootcampcr-q4kf60g115r.ws-us94.gitpod.io",
+        "Access-Control-Allow-Methods": "OPTIONS,GET,POST"
+      },
+      statusCode: 200, 
+      body: body 
+    }
+  end # if 
+end # def handler
+```
+
+In the updated Lambda, if the incoming event is not a preflight check, the function first extracts the extension of the file to be uploaded from the JSON body of the request. Then, it decodes the JWT token in the Authorization header to get the Cognito User ID. We deploy the change to our Lambda, then head back over to our web app and refresh, then test the upload again. Then, we head back over to CloudWatch again. 
+
+![image](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/c07e2280-9ed7-40ca-9443-9ec19f95a9f1)
+
+Andrew's logs are now returning the Cognito User ID passed as the `object_key`. We head over to S3 and view Andrew's upload bucket. It uploaded the image, naming the file the Cognito User ID. 
+
+![image](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/a92e97d6-4d99-4b36-af4f-7828c296b75e)
+
+I'm not having the same results. When I attempt to upload an image and use Inspect, I'm getting 404 undefined on the PUT and a CORS error. My `gateway_url` is returning undefined as well. I suspected an issue with my API Gateway, as the `gateway_url` is returning undefined. When I would view my CloudWatch logs, I would pass the preflight check, but that's it.
+
+![image](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/69106647-fea4-4a48-8b2c-1dbc7e9a427d)
+
+If I bypassed CORS by setting it in API Gateway completely wide open (basically giving a * value for everything), then it would appear to work correctly. When my troubleshooting steps failed, I went to our fellow bootcampers for assistance, creating a thread in our private Discord. I worked on this back and forth with fellow bootcamper @F4dy quite exhaustively until even he said everything appeared correct. 
+
+![image](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/4b4d667b-f116-40ea-acd3-69dd71ac76a4)
+
+It wasn't until I was able to troubleshoot with Andrew during a bootcamp Office hours study/homework group session that we were able to figure it out. When we added the `OPTIONS` route to our API Gateway, my CORS was still setup or cached to the previous configuration. Andrew was assisting me and had me clear the CORS settings from API Gateway in AWS. Previously, I had done this by manually clearing each field. Clicking the Clear button instead must've shook something loose, because once I did that, my Lambda ran correctly! I was able to test again, then check my CloudWatch logs.
+
+![image](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/347e77f0-70ce-40f7-9c95-6f58843dd2af)
+
+Moving forward from here, now all that's left to do is implement the upload to our web app. Or I should clarify. Our upload is working, we just need to implement it by displaying the updated image. 
