@@ -4264,4 +4264,213 @@ It wasn't until I was able to troubleshoot with Andrew during a bootcamp Office 
 
 ![image](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/347e77f0-70ce-40f7-9c95-6f58843dd2af)
 
-Moving forward from here, now all that's left to do is implement the upload to our web app. Or I should clarify. Our upload is working, we just need to implement it by displaying the updated image. 
+Moving forward from here, now all that's left to do is implement the upload to our web app. I should clarify. Our upload is working, we just need to implement it by displaying the updated image. We head back over to our workspace and open up `./frontend-react-js/src/components/Profileinfo.js`. Andrew notes this component contains the `signout` function, which is how he knew it had our `"profile-avatar"`. 
+
+![image](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/9ef91d89-81bd-45cc-93e0-eca74ebe3f04)
+
+We decide to make avatar as it's own component. In our `./frontend-react-js/src/components/` directory, we create a new file named `ProfileAvatar.js`. 
+
+```js
+import './ProfileAvatar.css';
+
+export default function ProfileAvatar(props) {
+  const backgroundImage = `url("https://assets.thejoshdev.com/banners/banner.jpg")`    
+  const styles = {
+    backgroundImage: backgroundImage,
+    backgroundSize: 'cover',
+    backgroundPosition: 'center',
+  };
+
+  return (
+    <div 
+      className="profile-avatar"
+      style={styles}  
+    ></div>
+  );
+}
+```
+
+We're wanting to update the `backgroundImage` URL string to the Cognito User ID. The place where we know we're getting that is `./frontend-react-js/src/lib/CheckAuth.js`. To see what we're getting for `cognito_user` in the `checkAuth` function, we `console.log` it out. 
+
+![image](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/2cc7091c-cd24-4af2-a777-879bf4a30595)
+
+For now we comment out our code for `ProfileAvatar`. We refresh our web app, then Inspect. 
+
+![image](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/3a2c266a-7844-42a8-bb88-f84ea05860d5)
+
+We see that `sub` is being returned which is the Cognito User ID. Back in `CheckAuth.js`, we add another parameter to `setUser`. 
+
+```js
+    .then((cognito_user) => {
+      setUser({
+        cognito_user_uuid: cognito_user.attributes.sub,
+        display_name: cognito_user.attributes.name,
+        handle: cognito_user.attributes.preferred_username
+      }) 
+```
+
+We're setting `cognito_user_uuid` to the value of the `sub` attribute of the `cognito_user` object. We're now able to update `backgroundImage` in `ProfileAvatar.js`.
+
+```js
+import './ProfileAvatar.css';
+
+export default function ProfileAvatar(props) {
+  const backgroundImage = `url("https://assets.thejoshdev.com/${props.user.cognito_user_uuid}.jpg")`    
+  const styles = {
+    backgroundImage: backgroundImage,
+    backgroundSize: 'cover',
+    backgroundPosition: 'center',
+  };
+
+  return (
+    <div 
+      className="profile-avatar"
+      style={styles}  
+    ></div>
+  );
+}
+```
+
+We need to pass this somewhere, so we head back over to `ProfileInfo.js`. 
+
+```js
+  return (
+    <div className={classes()}>
+      <div className="profile-dialog">
+        <button onClick={signOut}>Sign Out</button> 
+      </div>
+      <div className="profile-info" onClick={click_pop}>
+        <ProfileAvatar user={props.user} />
+        <div className="profile-desc">
+          <div className="profile-display-name">{props.user.display_name || "My Name" }</div>
+          <div className="profile-username">@{props.user.handle || "handle"}</div>
+        </div>
+        <ElipsesIcon className='icon' />
+      </div>
+    </div>
+  )
+}
+```
+
+We also add an import for `ProfileAvatar`. 
+
+```js
+import ProfileAvatar from 'components/ProfileAvatar';
+```
+
+We refresh our web app and inspect. There's a 403 error on a `GET`.
+
+![image](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/6db6196a-d788-47e6-a592-30f7cb6519eb)
+
+The pathing is incorrect. We head back over to `ProfileAvatar.js` and update the path. 
+
+```js
+export default function ProfileAvatar(props) {
+  const backgroundImage = `url("https://assets.thejoshdev.com/avatars/${props.user.cognito_user_uuid}.jpg")`    
+  const styles = {
+    backgroundImage: backgroundImage,
+    backgroundSize: 'cover',
+    backgroundPosition: 'center',
+  };
+```
+
+Another refresh of the web app, and now it's loading the image correctly. The below image is from Andrew's web app. 
+
+![image](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/67a4148e-37fd-4db8-9d2a-4a3ea459496a)
+
+We want the image to display as our main image on the Profile page as well, so we head back over to `ProfileHeading.js`. We add an import for `ProfileAvatar`. 
+
+```js
+import ProfileAvatar from 'components/ProfileAvatar';
+```
+
+We then return the `ProfileAvatar`. 
+
+```js
+  return (
+    <div className='activity_feed_heading profile_heading'>
+    <div className='title'>{props.profile.display_name}</div>
+    <div className="cruds_count">{props.profile.cruds_count} Cruds</div>
+    <div className="banner" style={styles} >
+      <ProfileAvatar user={props.profile} />
+    </div>
+```
+
+We decide instead we want to pass in the Cognito User ID here as well. In `ProfileInfo.js`, we update `ProfileAvatar`. 
+
+```js
+<ProfileAvatar id={props.user.cognito_user_uuid} />
+```
+
+Now we can update our path in `ProfileAvatar.js`. 
+
+```js
+export default function ProfileAvatar(props) {
+  const backgroundImage = `url("https://assets.thejoshdev.com/avatars/processed/${props.id}.jpg")` 
+```
+
+We also update `ProfileHeading.js`. 
+
+```js
+  return (
+    <div className='activity_feed_heading profile_heading'>
+    <div className='title'>{props.profile.display_name}</div>
+    <div className="cruds_count">{props.profile.cruds_count} Cruds</div>
+    <div className="banner" style={styles} >
+      <ProfileAvatar id={props.profile.cognito_user_uuid} />
+    </div>
+```
+
+We will need to return this information, so we update our query template, `./backend-flask/db/sql/user/show.sql`. 
+
+```sql
+SELECT
+  (SELECT COALESCE(row_to_json(object_row),'{}'::json) FROM (
+    SELECT
+      users.uuid,
+      users.cognito_user_id as cognito_user_uuid,
+      users.handle,
+      users.display_name,
+      users.bio,
+      (
+      SELECT 
+       count(true)
+      FROM public.activities
+      WHERE
+        activities.user_uuid = users.uuid
+       ) as cruds_count
+  ) object_row) as profile,
+```
+
+When we refresh our web app, now the main display image isn't displaying.
+
+![image](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/bcd116f7-8650-40cd-9476-fb4d47a4658a)
+
+This is an issue with our styling. We head over to `./frontend-react-js/src/components/ProfileHeading.css` and make some changes.
+
+```css
+.profile_heading {
+    padding-bottom: 0px;
+}
+
+.profile_heading .profile-avatar {
+    position: absolute;
+    bottom: -74px;
+    left: 16px;
+    width: 148px;
+    height: 148px;
+    border-radius: 999px;
+    border: solid 8px var(--fg);  
+}
+
+.profile_heading .banner {
+    position: relative;
+    height: 200px;
+}
+```
+
+Another refresh of our web app, and now our main display image is working correctly.
+
+![image](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/437eac90-f9d5-4453-a539-0255ee833d0f)
+
+That is where we wrapped things up for Week 8. A lot of content covered. But a lot of knowledge gained. 
