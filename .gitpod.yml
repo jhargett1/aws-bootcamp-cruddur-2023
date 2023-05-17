@@ -1,7 +1,7 @@
 tasks:
   - name: cfn
     before: |
-      ​pip install cfn-lint
+      pip install cfn-lint
       cargo install cfn-guard
   - name: aws-cli
     env:
