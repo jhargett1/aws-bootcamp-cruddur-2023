@@ -40,78 +40,78 @@ Resources:
       RouteTableId: !Ref RouteTable
       GatewayId: !Ref IGW
       DestinationCidrBlock: 0.0.0.0/0
-  SubnetPubA:
+  SubnetPub1:
     # https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-ec2-subnet.html
     Type: AWS::EC2::Subnet
     Properties:
       AssignIpv6AddressOnCreation: false
-      AvailabilityZone:
-      CidrBlock: 10.0.0.0/24
+      AvailabilityZone: us-east-1a
+      CidrBlock: 10.0.0.0/22
       EnableDns64: false
       MapPublicIpOnLaunch: true # public subnet
       VpcId: !Ref VPC
       Tags:
         - Key: Name
-          Value: CruddurSubnetPubA
-  SubnetPubB:
+          Value: CruddurSubnetPub1
+  SubnetPub2:
     # https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-ec2-subnet.html
     Type: AWS::EC2::Subnet
     Properties:
       AssignIpv6AddressOnCreation: false
-      AvailabilityZone:
-      CidrBlock: 10.0.0.0/24
+      AvailabilityZone: us-east-1b
+      CidrBlock: 10.0.4.0/22
       EnableDns64: false
       MapPublicIpOnLaunch: true # public subnet
       VpcId: !Ref VPC
       Tags:
         - Key: Name
-          Value: CruddurSubnetPubB  
-  SubnetPubC:
+          Value: CruddurSubnetPub2  
+  SubnetPub3:
     # https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-ec2-subnet.html
     Type: AWS::EC2::Subnet
     Properties:
       AssignIpv6AddressOnCreation: false
-      AvailabilityZone:
-      CidrBlock: 10.0.0.0/24
+      AvailabilityZone: us-east-1c
+      CidrBlock: 10.0.8.0/22
       EnableDns64: false
       MapPublicIpOnLaunch: true # public subnet
       VpcId: !Ref VPC
       Tags:
         - Key: Name
-          Value: CruddurSubnetPubC
-  SubnetPrivA:
+          Value: CruddurSubnetPub3
+  SubnetPriv1:
     # https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-ec2-subnet.html
     Type: AWS::EC2::Subnet
     Properties:
       AssignIpv6AddressOnCreation: false
-      AvailabilityZone:
-      CidrBlock: 10.0.0.0/24
+      AvailabilityZone: us-east-1a
+      CidrBlock: 10.0.12.0/22
       EnableDns64: false
       MapPublicIpOnLaunch: false # private subnet
       VpcId: !Ref VPC
       Tags:
         - Key: Name
           Value: CruddurSubnetPrivA  
-  SubnetPrivB:
+  SubnetPriv2:
     # https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-ec2-subnet.html
     Type: AWS::EC2::Subnet
     Properties:
       AssignIpv6AddressOnCreation: false
-      AvailabilityZone:
-      CidrBlock: 10.0.0.0/24
+      AvailabilityZone: us-east-1b
+      CidrBlock: 10.0.16.0/22
       EnableDns64: false
       MapPublicIpOnLaunch: false # private subnet
       VpcId: !Ref VPC
       Tags:
         - Key: Name
           Value: CruddurSubnetPrivB
-  SubnetPrivC:
+  SubnetPriv3:
     # https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-ec2-subnet.html
     Type: AWS::EC2::Subnet
     Properties:
       AssignIpv6AddressOnCreation: false
-      AvailabilityZone:
-      CidrBlock: 10.0.0.0/24
+      AvailabilityZone: us-east-1c
+      CidrBlock: 10.0.20.0/22
       EnableDns64: false
       MapPublicIpOnLaunch: false # private subnet
       VpcId: !Ref VPC
