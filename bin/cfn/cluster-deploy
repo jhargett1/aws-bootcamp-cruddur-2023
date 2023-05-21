@@ -12,7 +12,7 @@ STACK_NAME=$(cfn-toml key deploy.stack_name -t $CONFIG_PATH)
 PARAMETERS=$(cfn-toml params v2 -t $CONFIG_PATH)
 
 aws cloudformation deploy \
-    --stack-name "CrdCluster" \
+    --stack-name $STACK_NAME \
     --s3-bucket $BUCKET \
     --region $REGION \
     --template-file $CFN_PATH \
