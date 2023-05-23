@@ -1,0 +1,60 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: |
+  Task Definition
+  Fargate Service
+  Execution Role
+  Task Role
+
+Parameters:
+  NetworkingStack:
+    Type: String  
+    Description: This is our base layer of networking components e.g. VPC, Subnets
+    Default: CrdNet
+  ClusterStack:
+    Type: String  
+    Description: This is our cluster layer e.g. ECS Cluster
+    Default: CrdCluster
+
+Resources:
+  ServiceSG:
+    # https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-properties-ec2-security-group.html
+    Type: AWS::EC2::SecurityGroup
+    Properties: 
+      GroupName: !Sub "${AWS::StackName}AlbSG"
+      GroupDescription: Public Facing SG for our Cruddur ALB
+      VpcId: 
+        Fn::ImportValue:
+          !Sub ${NetworkingStack}VpcId 
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          SourceSecurityGroupId:
+            Fn::ImportValue:
+              !Sub ${ClusterStack}ALBSecurityGroupId       
+          FromPort: 80
+          ToPort: 80
+          CidrIp: '0.0.0.0/0'
+          Description: ALB HTTP
+  FargateService:
+    # https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-ecs-service.html
+    Type: AWS::ECS::Service
+    Properties: 
+      Cluster: 
+      DeploymentConfiguration:
+      DeploymentController: 
+      DesiredCount:
+      EnableExecuteCommand: true
+      HealthCheckGracePeriodSeconds:
+      LaunchType: FARGATE
+      LoadBalancers: 
+        -
+      NetworkConfiguration:
+      PlatformVersion: LATEST
+      PropagateTags: TASK_DEFINITION
+      Role: 
+
+  TaskDefinition:
+  ExecutionRole:
+  TaskRole:
+
+
+
