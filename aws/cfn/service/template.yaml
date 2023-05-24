@@ -14,7 +14,61 @@ Parameters:
     Type: String  
     Description: This is our cluster layer e.g. ECS Cluster
     Default: CrdCluster
-
+  ContainerPort:
+    Type: Number
+    Default: 4567
+  ServiceCpu:
+    Type: String
+    Default: '256'
+  ServiceMemory:
+    Type: String
+    Default: '512'
+  ServiceName:
+    Type: String
+    Default: backend-flask
+  ContainerName:
+    Type: String
+    Default: backend-flask
+  TaskFamily: 
+    Type: String
+    Default: backend-flask
+  EcrImage:
+    Type: String
+    Default: '554621479919.dkr.ecr.us-east-1.amazonaws.com/backend-flask'
+  EnvOtelServiceName:
+    Type: String
+    Value: backend-flask
+  EnvOtelExporterOtlpEndpoint:
+    Type: String
+    Value: 'https://api.honeycomb.io'
+  EnvAWSCognitoUserPoolId:
+    Type: String
+    Value: 'us-east-1_N7WWGl3KC'
+  EnvCognitoUserPoolClientId:
+    Type: String
+    Value: '575n8ecqc551iscnosab6e0un3'
+  EnvFrontendUrl:
+    Type: String
+    Value: 'https://thejoshdev.com'
+  EnvBackendUrl:
+    Type: String
+    Value: 'https://api.thejoshdev.com'
+  SecretsAWSAccessKeyId:
+    Type: String
+    Value: 'arn:aws:ssm:us-east-1:554621479919:parameter/cruddur/backend-flask/AWS_ACCESS_KEY_ID' 
+  SecretsSecretAccessKey:
+    Type: String
+    Value: 'arn:aws:ssm:us-east-1:554621479919:parameter/cruddur/backend-flask/AWS_SECRET_ACCESS_KEY'
+  SecretsConnectionUrl:
+    Type: String
+    Value: 'arn:aws:ssm:us-east-1:554621479919:parameter/cruddur/backend-flask/CONNECTION_URL'   
+  SecretsRollbarAccessToken:
+    Type: String
+    Value: 'arn:aws:ssm:us-east-1:554621479919:parameter/cruddur/backend-flask/ROLLBAR_ACCESS_TOKEN'  
+  SecretsOtelExporterOtlpHeaders:
+    Type: String
+    Value: 'arn:aws:ssm:us-east-1:554621479919:parameter/cruddur/backend-flask/OTEL_EXPORTER_OTLP_HEADERS' 
+  
 Resources:
   ServiceSG:
     # https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-properties-ec2-security-group.html
@@ -42,19 +96,128 @@ Resources:
       DeploymentConfiguration:
       DeploymentController: 
       DesiredCount:
+      EnableECSManagedTags: true
       EnableExecuteCommand: true
       HealthCheckGracePeriodSeconds:
       LaunchType: FARGATE
-      LoadBalancers: 
-        -
+      LoadBalancers:
+        - TargetGroupArn: arn:aws:elasticloadbalancing:us-east-1:554621479919:targetgroup/cruddur-backend-flask-tg/894e612b59521c2c
+          ContainerName: backend-flask
+          ContainerPort: !Ref ContainerPort
       NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: ENABLED
+          SecurityGroups:
+            - !GetAtt ServiceSG.GroupId
+          Subnets: !Split [",", !ImportValue { "Fn::Sub": "${NetworkingStack}PublicSubnetIds" }]
       PlatformVersion: LATEST
-      PropagateTags: TASK_DEFINITION
-      Role: 
+      PropagateTags: SERVICE 
+      ServiceRegistries:
+        - RegistryArn: !Sub 'arn:aws:servicediscovery:${AWS::Region}:${AWS::AccountId}:service/srv-cruddur-backend-flask'
+          Port: !Ref ContainerPort
+          ContainerName: backend-flask
+          ContainerPort: !Ref ContainerPort
+      ServiceName: !Ref ServiceName
+      TaskDefinition: !Ref TaskFamily
 
   TaskDefinition:
+    # https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-ecs-taskdefinition.html
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Ref TaskFamily
+      ExecutionRoleArn: arn:aws:iam::554621479919:role/CruddurServiceExecutionRole
+      TaskRoleArn: arn:aws:iam::554621479919:role/CruddurTaskRole
+      NetworkMode: awsvpc
+      Cpu: !Ref ServiceCpu
+      Memory: !Ref ServiceMemory
+      RequiresCompatibilities:
+        - FARGATE
+      ContainerDefinitions:
+        - Name: xray
+          Image: public.ecr.aws/xray/aws-xray-daemon
+          Essential: true
+          User: "1337"
+          PortMappings:
+            - Name: xray
+              ContainerPort: 2000
+              Protocol: udp
+        - Name: backend-flask
+          Image: !Ref EcrImage
+          Essential: true
+          HealthCheck:
+            Command:
+              - CMD-SHELL
+              - python /backend-flask/bin/health-check
+            Interval: 30
+            Timeout: 5
+            Retries: 3
+            StartPeriod: 60
+          PortMappings:
+            - Name: !Ref ContainerName
+              ContainerPort: !Ref ContainerPort
+              Protocol: tcp
+              AppProtocol: http
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: cruddur
+              awslogs-region: ${AWS::Region}
+              awslogs-stream-prefix: !Ref ServiceName
+          Environment:
+            - Name: OTEL_SERVICE_NAME
+              Value: !Ref EnvOtelServiceName
+            - Name: OTEL_EXPORTER_OTLP_ENDPOINT
+              Value: !Ref EnvOtelExporterOtlpEndpoint
+            - Name: AWS_COGNITO_USER_POOL_ID
+              Value: !Ref EnvAWSCognitoUserPoolId
+            - Name: AWS_COGNITO_USER_POOL_CLIENT_ID
+              Value: !Ref EnvCognitoUserPoolClientId
+            - Name: FRONTEND_URL
+              Value: !Ref EnvFrontendUrl
+            - Name: BACKEND_URL
+              Value: !Ref EnvBackendUrl
+            - Name: AWS_DEFAULT_REGION
+              Value: ${AWS::Region}
+          Secrets:
+            - Name: AWS_ACCESS_KEY_ID
+              ValueFrom: !Ref SecretsAWSAccessKeyId
+            - Name: AWS_SECRET_ACCESS_KEY
+              ValueFrom: !Ref SecretsSecretAccessKey
+            - Name: CONNECTION_URL
+              ValueFrom: !Ref SecretsConnectionUrl
+            - Name: ROLLBAR_ACCESS_TOKEN
+              ValueFrom: !Ref SecretsRollbarAccessToken
+            - Name: OTEL_EXPORTER_OTLP_HEADERS
+              ValueFrom: !Ref SecretsOtelExporterOtlpHeaders
+
+
   ExecutionRole:
   TaskRole:
 
-
+Resources:
+  CruddurServiceExecutionPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: cruddur-backend-flask-policy
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: VisualEditor0
+            Effect: Allow
+            Action:
+              - ecr:GetAuthorizationToken
+              - ecr:BatchCheckLayerAvailability
+              - ecr:GetDownloadUrlForLayer
+              - ecr:BatchGetImage
+              - logs:CreateLogStream
+              - logs:PutLogEvents
+            Resource: "*"
+          - Sid: VisualEditor1
+            Effect: Allow
+            Action:
+              - ssm:GetParameters
+              - ssm:GetParameter
+            Resource: !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/cruddur/${ServiceName}/*'
+      Roles:
+        - !Ref IamRole
 
