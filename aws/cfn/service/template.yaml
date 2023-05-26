@@ -102,8 +102,9 @@ Resources:
       HealthCheckGracePeriodSeconds: 0
       LaunchType: FARGATE
       LoadBalancers:
-      # TODO - UPDATE THIS
-        - TargetGroupArn: arn:aws:elasticloadbalancing:us-east-1:554621479919:targetgroup/cruddur-backend-flask-tg/894e612b59521c2c
+        - TargetGroupArn:
+            Fn::ImportValue:
+              !Sub "${ClusterStack}BackendTGArn"        
           ContainerName: backend-flask
           ContainerPort: !Ref ContainerPort
       NetworkConfiguration:
@@ -113,12 +114,23 @@ Resources:
             - !GetAtt ServiceSG.GroupId
           Subnets: !Split [",", !ImportValue { "Fn::Sub": "${NetworkingStack}PublicSubnetIds" }]
       PlatformVersion: LATEST
-      PropagateTags: SERVICE 
-      ServiceRegistries:
-        - RegistryArn: !Sub 'arn:aws:servicediscovery:${AWS::Region}:${AWS::AccountId}:service/srv-cruddur-backend-flask'
-          Port: !Ref ContainerPort
-          ContainerName: backend-flask
-          ContainerPort: !Ref ContainerPort
+      PropagateTags: SERVICE
+      ServiceConnectConfiguration:
+          Enabled: true
+          Namespace: "cruddur"
+          # TODO - If you want to log
+          # LogConfiguration:
+          Services: 
+            - DiscoveryName: "backend-flask"
+              PortName: "backend-flask"
+              ClientAliases:
+                - Port: 4567
+
+      #ServiceRegistries:
+      #  - RegistryArn: !Sub 'arn:aws:servicediscovery:${AWS::Region}:${AWS::AccountId}:service/srv-cruddur-backend-flask'
+      #    Port: !Ref ContainerPort
+      #    ContainerName: backend-flask
+      #    ContainerPort: !Ref ContainerPort
       ServiceName: !Ref ServiceName
       TaskDefinition: !Ref TaskFamily
 
@@ -255,3 +267,9 @@ Resources:
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/CloudWatchLogsFullAccess
         - arn:aws:iam::aws:policy/AWSXRayDaemonWriteAccess
+
+Outputs: 
+  ServiceSecurityGroupId:
+    Value: !GetAtt ServiceSG.GroupId
+    Export:
+      Name: !Sub "${AWS::StackName}ServiceSecurityGroupId"
