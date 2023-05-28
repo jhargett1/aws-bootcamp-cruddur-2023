@@ -7,6 +7,12 @@ Parameters:
   PythonRuntime: 
     Type: String
     Default: python3.9
+  MemorySize:
+    Type: Number
+    Default: 128
+  Timeout: 
+    Type: Number
+    Default: 3
 Resources:
   DynamoDBTable:
     # https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-dynamodb-table.html
@@ -50,16 +56,23 @@ Resources:
     Properties:
       Architectures: arm64
       CodeUri: ???
+      InlineCode: ???
+      PackageType: ZIP
       Handler: lambda_handler
       Runtime: !Ref PythonRuntime
       Role: !GetAtt ExecutionRole.Arn
+      MemorySize: !Ref MemorySize
+      Timeout: !Ref Timeout
       Events:
         Stream:
           Type: DynamoDB
           Properties:
             Stream: !GetAtt DynamoDBTable.StreamArn
-            BatchSize: 100
-            StartingPosition: TRIM_HORIZON
+            # TODO - Does our Lambda handle more than one record?
+            BatchSize: 1
+            # https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/sam-property-function-dynamodb.html#sam-function-dynamodb-startingposition
+            # TODO - Is this the right value? 
+            StartingPosition: LATEST
 
   LambdaLogGroup:
     Type: "AWS::Logs::LogGroup"
