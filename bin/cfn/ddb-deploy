@@ -35,7 +35,7 @@ PACKAGED_TEMPLATE_PATH="/workspace/aws-bootcamp-cruddur-2023/.aws-sam/build/pack
 # https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/sam-cli-command-reference-sam-deploy.html
 sam deploy \
   --template-file $PACKAGED_TEMPLATE_PATH \
-  --config-file $CONFIG_PATH \  
+  --config-file $CONFIG_PATH \
   --stack-name "CrdDdb"\
   --tags group="cruddur-ddb" \
-  --capabilities "CAPABILITY_IAM"
+  --capabilities "CAPABILITY_NAMED_IAM"
