@@ -1,4 +1,9 @@
-[deploy]
-bucket = 'jh-cfn-artifacts'
-region = 'us-east-1'
-stack_name = 'CrdSrvBackendFlask'
+version=0.1
+[default.build.parameters]
+region = "us-east-1"
+
+[default.package.parameters]
+region = "us-east-1"
+
+[default.deploy.parameters]
+region = "us-east-1"
