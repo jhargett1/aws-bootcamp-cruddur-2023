@@ -1,8 +1,8 @@
 #! /usr/bin/env bash
 set -e #stop the execution of the script if it fails
 
-CFN_PATH="/workspace/aws-bootcamp-cruddur-2023/aws/cfn/networking/template.yaml"
-CONFIG_PATH="/workspace/aws-bootcamp-cruddur-2023/aws/cfn/networking/config.toml"
+CFN_PATH="/workspace/aws-bootcamp-cruddur-2023/aws/cfn/cicd/template.yaml"
+CONFIG_PATH="/workspace/aws-bootcamp-cruddur-2023/aws/cfn/cicd/config.toml"
 
 cfn-lint $CFN_PATH
 
@@ -13,9 +13,9 @@ STACK_NAME=$(cfn-toml key deploy.stack_name -t $CONFIG_PATH)
 aws cloudformation deploy \
     --stack-name $STACK_NAME \
     --s3-bucket $BUCKET \
-    --s3-prefix networking \
+    --s3-prefix cicd \
     --region $REGION \
     --template-file $CFN_PATH \
     --no-execute-changeset \
-    --tags group="cruddur-networking" \
+    --tags group="cruddur-cicd" \
     --capabilities CAPABILITY_NAMED_IAM

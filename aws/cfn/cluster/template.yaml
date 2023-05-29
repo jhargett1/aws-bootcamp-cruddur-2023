@@ -1,5 +1,4 @@
 AWSTemplateFormatVersion: 2010-09-09
-
 Description: |
   The networking and cluster configuration to support Fargate containers:
   - ECS Fargate Cluster
