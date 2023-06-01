@@ -63,9 +63,13 @@ We set the value for a variable named `CFN_PATH` to the path for our `template.y
 Next, we deploy a CloudFormation stack using the `aws cloudformation deploy` command. Here are the options and arguments used:
 
 `--stack-name`: Specifies the name of the stack to create or update. In this case, it's set to "Cruddur".
+
 `--s3-bucket`: Specifies the S3 bucket to upload the CloudFormation template to. The value of the CFN_BUCKET variable is expected to be set somewhere else in the script or in the environment.
+
 `--template-file`: Specifies the path to the CloudFormation template file, which is set to the value of the CFN_PATH variable.
+
 `--no-execute-changeset`: Indicates that the changeset created during the deployment should not be executed immediately. It allows you to review the changes before applying them.
+
 `--capabilities CAPABILITY_NAMED_IAM`: Specifies the IAM capabilities required to create or update IAM resources in the CloudFormation stack. This capability is necessary when the template includes IAM resources.
 
 Andrew notes we're going to continue to use the `jh-cfn-artifacts` S3 bucket we created during the livestream, so we must set the variable for `CFN_BUCKET` as well. 
@@ -286,9 +290,13 @@ Since the route to local is already being created, we remove the commented lines
 ```
 
 A few key takeaways from these properties:
+
 `AssignIpv6AddressOnCreation`: controls whether IPV6 addresses are automatically assigned to instances that are launched in the subnet
+
 `AvailabilityZone`: the availability zone within AWS that our subnet is created in
+
 `EnableDns64`: controls whether DNS64 is enabled for an IPv6 enabled subnet. Since we're not using IPv6, this value is false
+
 `MapPublicIpOnLaunch`: controls the automatic assignment of a public IP address to instances launched within a subnet. Notice our public subnets have this set to true, where our private ones are set to false. 
 
 Next we must implement our `SubnetRouteTableAssocation` resources. This will associate our subnets with our route table in the VPC. 
