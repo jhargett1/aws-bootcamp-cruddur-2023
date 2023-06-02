@@ -4,6 +4,8 @@ We started off CloudFormation with a guest instructor Rohini Gaonkar, an AWS Sr.
 
 My main takeaway from this walkthrough to start our week off was that a lot of, if not most of what you will need to implement CloudFormation templates will be in the AWS documentation for it, which is quite vast. 
 
+## Networking Layer
+
 Moving onto main instruction, we now have a `cfn` folder created during the livestream in our `./aws` directory. We create a new folder within this directory named `networking`. Next we create a new file in this folder named `template.yaml`. We begin, just fleshing out the `template.yaml`, commenting what we're going to need.
 
 ```yaml
@@ -371,4 +373,272 @@ We again deploy the CFN template, this time the changeset is created. We execute
 
 ![image](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/b317cde4-52d4-4b37-a46c-031f3bca6bb4)
 
-Per the snippet above, since we specified `AssignIpv6AddressOnCreation`, we must also specify `Ipv6CidrBlock`. Since neither is being used, we just remove the `AssignIpv6AddressOnCreation` property from our template. 
+Per the snippet above, since we specified `AssignIpv6AddressOnCreation`, we must also specify `Ipv6CidrBlock`. Since neither is being used, we just remove the `AssignIpv6AddressOnCreation` property from our template. With the template file updated, we again run our `networking-deploy` script. We execute the changeset from CloudFormation and we have an `UPDATE_COMPLETE` status. 
+
+![image](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/4416f5ce-d7f3-4b4c-a775-4175da0a203e)
+
+Moving on, Andrew explains that we're not going to implement security groups at this layer, because security groups are usually around particular services. We also decide we want to clean things up in our code a little bit, particularly our `CidrBlock` properties. We do this by implementing some parameters:
+
+```yaml
+Parameters:
+  SubnetCidrBlocks: 
+    Description: "Comma-delimited list of CIDR blocks for our private public subnets"
+    Type: CommaDelimitedList
+    Default: > 
+      10.0.0.0/24, 
+      10.0.4.0/24, 
+      10.0.8.0/24, 
+      10.0.12.0/24, 
+      10.0.16.0/24, 
+      10.0.20.0/24   
+```
+
+You'll note that we're using a Comma Delimited List for our `SubnetCidrBlocks` parameter. Andrew explains how we're implementing this by using what's known as a scalar variable in Yaml. He shows us a slide from an unreleased course detailing this. A scalar is "a variable that holds one value at a time. Scalars are generally primitive data types e.g. String, Int, Bool". We're using what's known as a folded block scalar style, using the folded start with a `>`. This allows CloudFormation to treat our parameter as a single string. 
+
+We're able to reference these values for our `CidrBlock` property by using the `!Select` function. 
+
+```yaml
+CidrBlock: !Select [0, !Ref SubnetCidrBlocks]
+```
+
+In the above code snippet, we're selecting the first element from the list of subnet CIDR blocks, i.e. 10.0.0.0/24. 
+
+We also add a parameter for our VPC `CidrBlock` property as well. 
+
+```yaml
+Parameters:
+  VpcCidrBlock:
+    Type: String
+    Default: 10.0.0.0/16
+```
+
+We then pass the value of the parameter to the property using the `!Ref` function.
+
+```yaml
+Resources: 
+  VPC:
+    # https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-ec2-vpc.html
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref VpcCidrBlock
+```
+
+From there, we update the tags for all of our resources that have them in our `template.yaml` to utilize pseudo parameters from AWS, in this instance, the `AWS::StackName` parameter for our VPC. 
+
+```yaml
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}VPC"
+```
+
+In AWS CloudFormation, pseudo parameters are predefined variables that you can use in your CloudFormation templates. These parameters are automatically available and can provide information about the stack, region, AWS account, and other contextual information at the time of stack creation. Some further information on pseudo parameters from ChatGPT:
+
+"Pseudo parameters are resolved by CloudFormation during the stack creation or update process. They are not defined explicitly in the template, but rather they are automatically provided by AWS when the template is processed. Pseudo parameters are denoted by the `AWS::` prefix.
+
+Here are some examples of commonly used pseudo parameters in AWS CloudFormation:
+
+`AWS::AccountId`: Represents the AWS account ID associated with the stack.
+`AWS::Region`: Represents the AWS region where the stack is being created.
+`AWS::StackName`: Represents the name of the stack.
+`AWS::StackId`: Represents the unique ID of the stack.
+`AWS::NotificationARNs`: Represents a comma-separated list of notification Amazon Resource Names (ARNs) for the current stack.
+
+You can use these pseudo parameters within your template to dynamically reference or incorporate information about the stack or AWS environment. For example, you can use `AWS::Region` to ensure resources are created in the correct region or use `AWS::AccountId` to create unique resource names based on the AWS account ID.
+
+Note that pseudo parameters are read-only, and you cannot assign values to them or modify their behavior."
+
+With these changes implemented, we're not building anything extra in the `template.yaml`, we're just updating some naming and how our `CidrBlock` properties are read. With that in mind, to make sure it works, we go back to CloudFormation and tear down our stack. Next we redeploy using our `networking-deploy` script. After the changeset is created, we execute it. While that's being created, we go back to our workspace and begin working on some Outputs. Adding outputs will allow us to expose information about our resources created by the stack. We'll be able to use these outputs for other stacks when we implement future layers. 
+
+```yaml
+Outputs:
+  VpcId:
+    Value: !Ref VPC
+    Export:
+      Name: VpcId
+  VpcCidrBlock:
+    Value: !GetAtt VPC.CidrBlock
+    Export:
+      Name: VpcCidrBlock
+  SubnetCidrBlocks:
+    Value: !Join [",", !Ref SubnetCidrBlocks]
+    Export:
+      Name: SubnetCidrBlocks
+  SubnetIds: 
+    Value: !Join 
+      - "," 
+      - - !Ref SubnetPub1 
+        - !Ref SubnetPub2 
+        - !Ref SubnetPub3 
+        - !Ref SubnetPriv1
+        - !Ref SubnetPriv2
+        - !Ref SubnetPriv3
+    Export: 
+      Name: SubnetIds
+  AvailabilityZones:
+    Value: !Join 
+      - "," 
+      - - !Ref Az1
+        - !Ref Az2
+        - !Ref Az3  
+    Export: 
+      Name: AvailabilityZones
+```
+
+Let's breakdown each output:
+
+`VpcId`: This output references the VPC resource using `!Ref VPC`. It exports the value with the name `VpcId`. This output can be referenced in other stacks to retrieve the VPC ID.
+
+`VpcCidrBlock`: This output uses the `!GetAtt` function to retrieve the `CidrBlock` attribute of the `VPC` resource. It exports the value with the name `VpcCidrBlock`. This output provides the CIDR block of the VPC.
+
+`SubnetCidrBlocks`: This output uses the `!Join` function to concatenate the values of `SubnetCidrBlocks`, which are referenced by `!Ref SubnetCidrBlocks`, separated by commas. It exports the joined value with the name `SubnetCidrBlocks`. This output provides a comma-separated list of subnet CIDR blocks.
+
+`SubnetIds`: This output uses the `!Join` function to concatenate the values of `SubnetPub1`, `SubnetPub2`, `SubnetPub3`, `SubnetPriv1`, `SubnetPriv2`, and `SubnetPriv3` separated by commas. The subnet values are obtained using `!Ref` for each subnet. It exports the joined value with the name `SubnetIds`. This output provides a comma-separated list of subnet IDs.
+
+`AvailabilityZones`: This output uses the `!Join` function to concatenate the values of `Az1`, `Az2`, and `Az3` separated by commas. The availability zone values are obtained using !Ref for each availability zone. It exports the joined value with the name `AvailabilityZones`. This output provides a comma-separated list of availability zones.
+
+When we again deploy then execute the changeset from CloudFormation,  we now have Outputs available under the Outputs tab. 
+
+![image](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/dece2220-acea-4577-8c6f-51d919b5db20)
+
+This completes the networking layer. 
+
+## Cluster Layer
+
+Next, we are going to implement our Cluster layer to define our Fargate cluster. Back in our workspace, we create a new folder named `cluster` in the `./aws/cfn` directory. We create a new file in the folder named `template.yaml`, then create a new script in our `./bin/cfn` directory named `cluster-deploy`. We again start off by fleshing out our `template.yaml`, and we also pull over the resource we created during our livestream.
+
+```yaml
+AWSTemplateFormatVersion: 2010-09-09
+
+# Parameters:
+Resources:
+  ECSCluster: #LogicalName
+    Type: 'AWS::ECS::Cluster'
+    Properties:
+      ClusterName: MyCluster1
+      CapacityProviders:
+        - FARGATE
+# Outputs:
+
+```
+
+You can see we're creating an ECS Cluster resource. We continue on with this, adding properties for the cluster:
+
+```yaml
+AWSTemplateFormatVersion: 2010-09-09
+
+# Parameters:
+Resources:
+  FargateCluster:
+    # https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-ecs-cluster.html 
+    Type: AWS::ECS::Cluster
+    Properties: 
+      ClusterName: !Sub "${AWS::StackName}FargateCluster"
+      CapacityProviders: 
+        - FARGATE 
+      ClusterSettings: 
+        - Name: containerInsights
+          Value: enabled
+      Configuration: 
+        ExecuteCommandConfiguration:
+          Logging: DEFAULT
+      ServiceConnectDefaults: 
+        Namespace: cruddur
+# Outputs:
+```
+
+Some information on the properties of the cluster: 
+
+`CapacityProviders`: This property specifies the capacity providers to associate with the cluster. In this case, it has a single value `FARGATE`, indicating that the cluster should use AWS Fargate capacity provider.
+
+`ClusterSettings`: This property allows you to configure additional settings for the cluster. In this case, it specifies a setting named `containerInsights` with the value enabled, enabling the CloudWatch Container Insights feature.
+
+`Configuration`: This property allows you to specify additional configurations for the cluster. Here, it includes the `ExecuteCommandConfiguration` property with Logging set to `DEFAULT`, which configures the default logging behavior for execute command functionality.
+
+`ServiceConnectDefaults`: This property allows you to specify a default Service Connect namespace. Once the default namespace is set, any new services with Service Connect turned on that are created in the cluster are added as client service in the namespace. We set the `Namespace` property to `cruddur`.
+
+While working through AWS documentation for this, we come upon the `Description` section and decide to go back and add this to our networking layer `template.yaml`.
+
+```yaml
+Description: |
+  The base networking components for our stack:
+  - VPC
+    - sets DNS hostnames for EC2 instances
+    - Only IPv4, IPv6 is disabled
+  - InternetGateway 
+  - Route Table
+    - Route to the IGW
+    - Route to Local
+  - 6 Subnets Explicitly Associated to Route Table
+    - 3 Public Subnets numbered 1 to 3
+    - 3 Private Subnets numbered 1 to 3
+```
+
+We begin working on the `cluster-deploy` script now as well by copying our `networking-deploy` script as a start off point, then editing it down. 
+
+```sh
+#! /usr/bin/env bash
+set -e #stop the execution of the script if it fails
+
+CFN_PATH="/workspace/aws-bootcamp-cruddur-2023/aws/cfn/cluster/template.yaml"
+
+cfn-lint $CFN_PATH 
+
+aws cloudformation deploy \
+    --stack-name "Cruddur" \
+    --s3-bucket $CFN_BUCKET \
+    --template-file $CFN_PATH \
+    --no-execute-changeset \
+    --tags group="cruddur-cluster" \
+    --capabilities CAPABILITY_NAMED_IAM
+```
+
+You'll notice the `CFN_PATH` is now updated to the path for our cluster `template.yaml` file, and we're also propagating down tags from the CloudFormation commands. We go back to our `networking-deploy` script and implement the tags there as well. Then, we move forward with implementing our cluster layer through the `template.yaml`. We add an application load balancer.
+
+```yaml
+  ALB:
+    # https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-elasticloadbalancingv2-loadbalancer.html
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Sub "${AWS::StackName}ALB"
+      Type: application
+      IpAddressType: ipv4
+      # https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-properties-elasticloadbalancingv2-loadbalancer-loadbalancerattributes.html
+      Scheme: internet-facing
+      SecurityGroups: 
+        - !Ref ALBSG
+      Subnets: !Split [",", !ImportValue { "Fn::Sub": "${NetworkingStack}SubnetIds" }]
+      LoadBalancerAttributes: 
+        - Key: routing.http2.enabled
+          Value: true
+        - Key: routing.http.preserve_host_header.enabled
+          Value: false
+        - Key: deletion_protection.enabled
+          Value: true
+        - Key: load_balancing.cross_zone.enabled
+          Value: true
+        - Key: access_logs.s3.enabled
+          Value: false
+          # In case we want to turn on logs
+        # - Key: access_logs.s3.bucket
+          # Value: bucket-name
+        # - Key: access_logs.s3.prefix
+          # Value: ""
+```
+
+More details on the properties we're setting here:
+
+`Type`:  Indicates the type of load balancer. In this case, it is set to application, which represents an application load balancer.
+
+`IpAddressType`: Specifies the IP address type for the ALB. Here, it is set to `ipv4`, indicating the use of IPv4 addresses. It is the most common choice and allows the ALB to handle traffic over IPv4. The other option we could've selected is `dualstack`. This option specifies that the ALB should use both IPv4 and IPv6 addresses. It enables the ALB to handle traffic over both IPv4 and IPv6 protocols
+
+`LoadBalancerAttributes`: Specifies a list of load balancer attributes and their corresponding values. Each attribute is represented as a dictionary with a Key and Value pair.
+
+`Key: routing.http2.enabled`: Enables HTTP/2 routing for the ALB.
+
+`Key: routing.http.preserve_host_header.enabled`: Disables preserving the host header for HTTP routing. When set to false, the host header is not preserved when forwarding requests to the target groups.
+
+`Key: deletion_protection.enabled`: Enables deletion protection for the ALB. When deletion protection is enabled, the ALB cannot be deleted accidentally.
+
+`Key: load_balancing.cross_zone.enabled`: Enables cross-zone load balancing. When enabled, the ALB evenly distributes traffic across all availability zones specified in the subnets property.
+
+`Key: access_logs.s3.enabled`: Disables access logs to be stored in Amazon S3. When set to false, no access logs will be generated and stored.
