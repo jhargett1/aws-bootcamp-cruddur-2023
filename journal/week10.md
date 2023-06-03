@@ -605,8 +605,8 @@ You'll notice the `CFN_PATH` is now updated to the path for our cluster `templat
       # https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-properties-elasticloadbalancingv2-loadbalancer-loadbalancerattributes.html
       Scheme: internet-facing
       SecurityGroups: 
-        - !Ref ALBSG
-      Subnets: !Split [",", !ImportValue { "Fn::Sub": "${NetworkingStack}SubnetIds" }]
+        - security group ids
+      Subnets: 
       LoadBalancerAttributes: 
         - Key: routing.http2.enabled
           Value: true
@@ -625,7 +625,7 @@ You'll notice the `CFN_PATH` is now updated to the path for our cluster `templat
           # Value: ""
 ```
 
-More details on the properties we're setting here:
+Remember that we have left the `Subnets` property blank for now. More details on the properties we're setting here:
 
 `Type`:  Indicates the type of load balancer. In this case, it is set to application, which represents an application load balancer.
 
@@ -635,10 +635,675 @@ More details on the properties we're setting here:
 
 `Key: routing.http2.enabled`: Enables HTTP/2 routing for the ALB.
 
-`Key: routing.http.preserve_host_header.enabled`: Disables preserving the host header for HTTP routing. When set to false, the host header is not preserved when forwarding requests to the target groups.
+`Key: routing.http.preserve_host_header.enabled`: Enables preserving the host header for HTTP routing. When set to false, the host header is not preserved when forwarding requests to the target groups.
 
 `Key: deletion_protection.enabled`: Enables deletion protection for the ALB. When deletion protection is enabled, the ALB cannot be deleted accidentally.
 
 `Key: load_balancing.cross_zone.enabled`: Enables cross-zone load balancing. When enabled, the ALB evenly distributes traffic across all availability zones specified in the subnets property.
 
-`Key: access_logs.s3.enabled`: Disables access logs to be stored in Amazon S3. When set to false, no access logs will be generated and stored.
+`Key: access_logs.s3.enabled`: Enables access logs to be stored in Amazon S3. When set to false, no access logs will be generated and stored.
+
+We also commented out a couple of lines of code that would enable logging of our S3 bucket with a name value given by us, which would capture detailed information about every request made to the bucket, such as the requester's IP address, the time of the request, the HTTP status code, and more. The `access_logs.s3.prefix` property specifies a prefix or a directory within the access logging S3 bucket where the logs should be stored. By using a prefix, you can organize and categorize the logs based on specific criteria, such as by date, requester, or any other relevant information.
+
+Also notice that our `SecurityGroups` property does not have a valid value yet. We must create our security groups as well to reference the logical ID of the SG. We continue on with fleshing out the cluster template, adding a `Descritpion` field to the template.
+
+```yaml
+Description: |
+  The networking and cluster configuration to support Fargate containers:
+  - ECS Fargate Cluster
+  - Application Load Balancer (ALB)
+    -IPv4 only
+    - internet facing
+  - ALB Security Group
+  - HTTPS Listener
+    - send root domain to frontend Target Group
+    - send API subdomain to backend Target Group
+  - HTTP Listener
+    - redirects to HTTPS Listener
+  - Backend Target Group
+  - Frontend Target Group
+```
+
+A `Description` field in a CFN template provides an overview of what the template does. It's not mandatory for a CFN template, but it is considered a good practice to include it, as it can help other team members, stakeholders, or reviewers understand the purpose and functionality of the template. 
+
+Before we implement security groups, we must add the listeners for our HTTP and HTTPS. As noted in our `Description`, the HTTPS Listener will send HTTPS requests from our ALB to our frontend target group and send API requests to our backend target group. The HTTP listener will redirect to the HTTPS listener. 
+
+```yaml
+  HTTPSListener:
+    # https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-elasticloadbalancingv2-listener.html
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      Protocol: HTTPS    
+      Port: 443
+      LoadBalancerArn: !Ref ALB           
+      Certificates: 
+        - CertificateArn: !Ref CertificateArn
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref FrontendTG
+  HTTPListener: 
+    # https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-elasticloadbalancingv2-listener.html
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      Protocol: HTTP
+      Port: 80
+      LoadBalancerArn: !Ref ALB        
+      DefaultActions:
+        - Type: redirect
+          RedirectConfig:
+            Protocol: "HTTPS"
+            Port: 443
+            Host: "#{host}"
+            Path: "/#{path}"
+            Query: "#{query}"
+            StatusCode: "HTTP_301"
+```
+
+We're passing a parameter as the value for `CertificateArn`. The parameter is called `CertificateArn`, so we add this as a parameter as well. 
+
+```yaml
+Parameters:
+  CertificateArn:
+    Type: String
+    
+```
+
+The properties we're using for the listeners here are fairly self explanatory, but I'll dig in a bit here: 
+
+For our `HTTPSListener`: 
+
+`Protocol`: Sets the listener's protocol to HTTPS, indicating that it will handle incoming HTTPS traffic.
+
+`Port`: Defines the port number on which the listener will listen for HTTPS requests (port 443 in this case).
+
+`LoadBalancerArn`: Refers to the ARN of the ALB to which the listener will be attached.
+
+`Certificates`: Specifies the SSL/TLS certificate to be used for encrypting and decrypting HTTPS traffic. It references the certificate ARN using the !Ref intrinsic function.
+
+`DefaultActions`: Defines the default action to be taken by the listener when it receives a request. In this case, it is set to forward the request to a target group referenced by `FrontendTG`, which we will define a bit further down.
+
+For our `HTTPListener`:
+
+`DefaultActions`: Defines the default action to be taken by the listener when it receives a request. In this case, it is set to redirect the request to HTTPS using the specified `RedirectConfig`.
+
+`Type`: Specifies the action type as "redirect".
+
+`RedirectConfig`: Provides configuration options for the redirect action, including the target protocol (HTTPS), port (443), host, path, query, and status code (`HTTP_301` indicating a permanent redirect).
+
+
+From here, we add our application load balancer security group, or `ALBSG`. 
+
+```yaml
+  ALBSG:
+    # https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-properties-ec2-security-group.html
+    Type: AWS::EC2::SecurityGroup
+    Properties: 
+      GroupName: !Sub "${AWS::StackName}AlbSG"
+      GroupDescription: Public Facing SG for our Cruddur ALB
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: '0.0.0.0/0'
+          Description: INTERNET HTTPS
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: '0.0.0.0/0'
+          Description: INTERNET HTTP
+```
+
+The properties defined here `GroupName` and `GroupDescription` sets the name and provides a description of the security group. The name cannot start with "sg" and the `GroupDescription` is a required property. There's a couple rules set in the `SecurityGroupIngress` property that I'll explain further: 
+
+The first rule allows TCP traffic on port 443 (HTTPS) from any source IP (0.0.0.0/0) and provides a description indicating that it is for internet HTTPS traffic.
+
+```yaml
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: '0.0.0.0/0'
+          Description: INTERNET HTTPS
+```
+
+The second rule allows TCP traffic on port 80 (HTTP) from any source IP (0.0.0.0/0) and provides a description indicating that it is for internet HTTP traffic.
+
+```yaml
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: '0.0.0.0/0'
+          Description: INTERNET HTTP
+```
+
+With our security group defined, we can now go back to our load balancer to define the security group property:
+
+```yaml
+  ALB:
+    # https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-elasticloadbalancingv2-loadbalancer.html
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Sub "${AWS::StackName}ALB"
+      Type: application
+      IpAddressType: ipv4
+      # https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-properties-elasticloadbalancingv2-loadbalancer-loadbalancerattributes.html
+      Scheme: internet-facing
+      SecurityGroups: 
+        - !Ref ALBSG
+```
+
+We're returning the logical ID of the `ALBSG` for our `SecurityGroups` property above. We check the previous configuration prior to CFN through AWS, and in keeping with what we defined in our description, we must add an additional rule for our HTTPS Listener to redirect API requests to our backend target group, which we've yet to define as well. To do this, we add a Listener Rule.
+
+```yaml
+  ApiALBListenerRule:
+    # https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-elasticloadbalancingv2-listenerrule.html
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      Conditions: 
+        - Field: host-header
+          HostHeaderConfig: 
+            Values: 
+              - api.thejoshdev.com
+      Actions: 
+        - Type: forward
+          TargetGroupArn: !Ref BackendTG
+      ListenerArn: !Ref HTTPSListener
+      Priority: 1
+```
+
+Here's a further breakdown of our properties: 
+
+`Conditions`: Specifies the conditions that must be met for the rule to be applied. 
+
+`Field`: Sets the condition field to "host-header", which means the rule will be applied based on the value of the host header in the incoming request. The host header indicates the specific host or domain the HTTP request wants to communicate with. The host header allows the server to identify which virtual host or website the client is targeting when multiple websites or applications are hosted on the same server.
+
+`HostHeaderConfig`: Specifies the configuration for the host header condition.
+
+`Values`: Sets the expected value for the host header to `api.thejoshdev.com`. The rule will match requests with this host-header value.
+
+The `Actions` properties forwards the requests that are matched with the host-header set in our `Conditions`, in this case, `api.thejoshdev.com` and forwards them to the `BackendTG` target group, which we still need to define. 
+
+The `Priority` property sets the priority of the rule to 1, which determines the order of rules to be evaluated. The lower the number, the higher the priority.
+
+We are now ready to define our `BackendTG` and `FrontendTG` target groups that we've referenced in our cluster `template.yaml`. 
+
+```yaml
+  BackendTG:
+    # https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-elasticloadbalancingv2-targetgroup.html
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties: 
+      Name: !Sub "${AWS::StackName}BackendTG"
+      Port: !Ref BackendPort
+      HealthCheckEnabled: true      
+      HealthCheckProtocol: !Ref BackendHealthCheckProtocol         
+      HealthCheckIntervalSeconds: !Ref BackendHealthCheckIntervalSeconds
+      HealthCheckPath: !Ref BackendHealthCheckPath
+      HealthCheckPort: !Ref BackendHealthCheckPort
+      HealthCheckTimeoutSeconds: !Ref BackendHealthCheckTimeoutSeconds
+      HealthyThresholdCount: !Ref BackendHealthyThresholdCount
+      UnhealthyThresholdCount: !Ref BackendUnhealthyThresholdCount
+      IpAddressType: ipv4
+      Matcher: 
+        HttpCode: 200
+      Protocol: HTTP
+      ProtocolVersion: HTTP2
+      TargetGroupAttributes: 
+        - Key: deregistration_delay.timeout_seconds
+          Value: 0
+      VpcId: CROSS_REFERENCE_STACK    
+  FrontendTG:
+    # https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-elasticloadbalancingv2-targetgroup.html
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties: 
+      Name: !Sub "${AWS::StackName}FrontendTG"
+      Port: !Ref FrontendPort
+      HealthCheckEnabled: true      
+      HealthCheckProtocol: !Ref FrontendHealthCheckProtocol         
+      HealthCheckIntervalSeconds: !Ref FrontendHealthCheckIntervalSeconds
+      HealthCheckPath: !Ref FrontendHealthCheckPath
+      HealthCheckPort: !Ref FrontendHealthCheckPort
+      HealthCheckTimeoutSeconds: !Ref FrontendHealthCheckTimeoutSeconds
+      HealthyThresholdCount: !Ref FrontendHealthyThresholdCount
+      UnhealthyThresholdCount: !Ref FrontendUnhealthyThresholdCount
+      IpAddressType: ipv4
+      Matcher: 
+        HttpCode: 200
+      Protocol: HTTP
+      ProtocolVersion: HTTP2
+      TargetGroupAttributes: 
+        - Key: deregistration_delay.timeout_seconds
+          Value: 0
+      VpcId: CROSS_REFERENCE_STACK
+```
+
+Some key takeaways from the properties we defined for our target groups that I haven't referenced yet:
+
+`HealthCheckEnabled`: Indicates whether health checks are enabled for the target group. It is set to true.
+
+`HealthCheckProtocol`: References the protocol used for health checks. 
+
+`HealthCheckIntervalSeconds`: References the interval between health checks in seconds. 
+
+`HealthCheckPath`: References the path used for health checks. 
+
+`HealthCheckPort`: References the port used for health checks. 
+
+`HealthCheckTimeoutSeconds`: References the timeout for health checks in seconds. 
+
+`HealthyThresholdCount`: References the number of consecutive successful health checks required to mark a target as healthy.
+
+`UnhealthyThresholdCount`: References the number of consecutive failed health checks required to mark a target as unhealthy.
+
+`Matcher`: Defines the HTTP response code used to determine the health of a target.
+
+`TargetGroupAttributes`: An array property that allows you to define multiple attributes for the target group.
+
+I asked ChatGPT to break down the `TargetGroupAttributes` property a little bit further, as I wanted to understand this property more as well, specifically the `Key` value: 
+
+"`Key: deregistration_delay.timeout_seconds` specifies the attribute key as `deregistration_delay.timeout_seconds`. This key refers to the attribute that controls the amount of time a target is kept in the "draining" state after it is deregistered from the target group. The "draining" state allows existing connections to complete before the target is completely removed." 
+
+With that information, we know that the `Value` property then sets that value to `0`, which will mean the target will immediately be removed from the target group once it's deregistered. 
+
+We're also passing a lot of parameters here, so we add them to our `Parameters` section of the template.
+
+```yaml
+Parameters:
+  CertificateArn:
+    Type: String
+  # Frontend -----------
+  FrontendPort:
+    Type: Number
+    Default: 3000      
+  FrontendHealthCheckIntervalSeconds:
+    Type: Number
+    Default: 15
+  FrontendHealthCheckPath: 
+    Type: String
+    Default: "/"
+  FrontendHealthCheckPort: 
+    Type: String
+    Default: 80
+  FrontendHealthCheckProtocol: 
+    Type: String
+    Default: HTTP
+  FrontendHealthCheckTimeoutSeconds: 
+    Type: Number
+    Default: 5
+  FrontendHealthyThresholdCount: 
+    Type: Number
+    Default: 2
+  FrontendUnhealthyThresholdCount: 
+    Type: Number
+    Default: 2
+  # Backend -----------  
+  BackendPort:
+    Type: Number
+    Default: 4567  
+  BackendHealthCheckIntervalSeconds:
+    Type: Number
+    Default: 15
+  BackendHealthCheckPath: 
+    Type: String
+    Default: "/api/health-check"
+  BackendHealthCheckPort: 
+    Type: String
+    Default: 80
+  BackendHealthCheckProtocol: 
+    Type: String
+    Default: HTTP
+  BackendHealthCheckTimeoutSeconds: 
+    Type: Number
+    Default: 5
+  BackendHealthyThresholdCount: 
+    Type: Number
+    Default: 2
+  BackendUnhealthyThresholdCount: 
+    Type: Number
+    Default: 2
+```
+
+You may also note that above for our target groups we haven't fully implemented the `VpcId` property. We need to import the value of this from our networking `template.yaml` via a cross-stack reference. We do this through the use of the `Fn::ImportValue` function. The `Fn::ImportValue` function returns the value of an output exported by another stack. In our case, an export from our networking stack. We begin by passing the stack as a parameter.
+
+```yaml
+Parameters:
+  NetworkingStack:
+    Type: String  
+    Description: This is our base layer of networking components e.g. VPC, Subnets
+    Default: CrdNet
+```
+
+We then add the `Fn::ImportValue` function as the value of our `VpcId` property.
+
+```yaml
+      VpcId: 
+        Fn::ImportValue:
+          !Sub ${NetworkingStack}VpcId    
+```
+
+This is added for both the `FrontendTG` and `BackendTG` target groups. We're also using the `!Sub` function to substitute the `NetworkingStack` variable into the string. 
+
+Since we added the parameters to allow cross stack references to our networking layer, we're now prepared to finish implementing the `Subnets` property we left blank earlier in our ALB. Andrew notes this is tricky, because they come in as a string, but we're going to need to break them down into an array. To do this, we're going to use the `Fn::Split` function. This function splits a string into a list of string values, so we can select an element from the resulting string list. Here's a further breakdown of that syntax: 
+
+`Fn::Split: [delimiter, source string]`
+
+```yaml
+  ALB:
+    # https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-elasticloadbalancingv2-loadbalancer.html
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Sub "${AWS::StackName}ALB"
+      Type: application
+      IpAddressType: ipv4
+      # https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-properties-elasticloadbalancingv2-loadbalancer-loadbalancerattributes.html
+      Scheme: internet-facing
+      SecurityGroups: 
+        - !Ref ALBSG
+      Subnets: !Split [",", !ImportValue { "Fn::Sub": "${NetworkingStack}VpcId" }]
+```
+
+We are using the `Fn::Split` function (seen in short form here). You can see that our delimiter is a "," , with the source string using the `Fn::ImportValue` function we used above. Andrew implemented his a bit differently, but I believe I was running into indentation problems, and instead implemented it as one line, as seen above. Andrew's looked like this: 
+
+![image](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/df562946-7559-4c25-b684-03fe1d345069)
+
+In reviewing our template prior to deploying, it's noted that our original naming for our networking stack was just `Cruddur`, which will not work for the additional layers we're going to be implementing. We must go back and rename it, setting a naming convention for future layers. We do this by going back to our `networking-deploy` script.
+
+```sh
+#! /usr/bin/env bash
+set -e #stop the execution of the script if it fails
+CFN_PATH="/workspace/aws-bootcamp-cruddur-2023/aws/cfn/networking/template.yaml"
+cfn-lint $CFN_PATH 
+
+aws cloudformation deploy \
+    --stack-name "CrdNet" \
+    --s3-bucket $CFN_BUCKET \
+    --template-file $CFN_PATH \
+    --no-execute-changeset \
+    --tags group="cruddur-networking" \
+    --capabilities CAPABILITY_NAMED_IAM
+```
+
+Then we update `cluster-deploy`.
+
+```sh
+#! /usr/bin/env bash
+set -e #stop the execution of the script if it fails
+CFN_PATH="/workspace/aws-bootcamp-cruddur-2023/aws/cfn/networking/template.yaml"
+cfn-lint $CFN_PATH 
+
+aws cloudformation deploy \
+    --stack-name "CrdCluster" \
+    --s3-bucket $CFN_BUCKET \
+    --template-file $CFN_PATH \
+    --no-execute-changeset \
+    --tags group="cruddur-cluster" \
+    --capabilities CAPABILITY_NAMED_IAM
+```
+
+To implement this change, we're going to have to tear down our existing network stack. We head back over to CloudFormation, and delete the `Cruddur` stack.
+
+![image](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/7ac3066f-7b48-4b14-b6ec-ce54925cb203)
+
+Andrew mentions we're also using the `Cruddur` name for our existing AWS resources as well, which we may run into conflicts about with future CFN templates. To circumvent this, we delete our existing AWS resources including frontend and backend services in ECS, Fargate cluster in ECS, ALB, target groups, Namespace from Cloud Map.
+
+We are now ready to redeploy our network stack. We run `networking-deploy`, then head over to CloudFormation.
+
+![image](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/72421a43-34d3-4c0b-99cb-b34ea38fc211)
+
+We execute the changeset from CloudFormation, and while we're waiting come to find that we didn't update the value imported for our `Subnets` property of our ALB. To fix this, we have to go back over to our networking `template.yaml` and make sure of the name of the property being exported for `SubnetIds`.
+
+![image](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/5ebfc2a0-bfb2-4c22-9e95-6b317a5e8165)
+
+It's just `SubnetIds`, so we fix this in our cluster template. 
+
+```yaml
+      Subnets: !Split [",", !ImportValue { "Fn::Sub": "${NetworkingStack}SubnetIds" }]
+```
+
+We go back to CloudFormation again and check on our networking stack:
+
+![image](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/6721810e-831a-4f77-bfa0-d5b12c806cb8)
+
+With the stack created successfully, we check our Outputs, and decide we want to add the stack name to our exports. To do this, we use the `!Sub` function to add a pseudo parameter of the `StackName` to each output from our networking `template.yaml`. In the example shown below, we're updating the `VpcId` property's output:
+
+```yaml
+Outputs:
+  VpcId:
+    Value: !Ref VPC
+    Export:
+      Name: !Sub "${AWS::StackName}VpcId"
+```
+
+We again tear down our networking stack from CloudFormation, then start the cycle all over again: ran `networking-deploy` script and executed changeset from CFN. Our networking stack re-deploys without any issue, and when we check the Outputs again, they're now updated to include the `StackName` pseudo parameter. 
+
+![1 47 51 into CFN Cluster Layer added stackname to outputs](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/2115c3ea-170d-4103-b8f1-54b622222218)
+
+We're now ready to test our cluster stack's deployment. We run `cluster-deploy` from our terminal. We receive an error from `cfn-lint`:
+
+![image](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/1df98404-26ff-48af-b1af-b71922c19550)
+
+We're receiving an error because our `CertificateArn` does not have a value. For this, we're wanting to bring in an external value. To do this, we're going to use the library that Andrew created, `cfn-toml`. This will allow us to pull in external parameters as variables within our deploy scripts, then pass them during creation from our CFN templates. These values are normally hardcoded into the script/command to deploy the CFN template, but with Andrew's library this won't be necessary. 
+
+Andrew directs us to his public repo for `cfn-toml` here: https://github.com/teacherseat/cfn-toml/tree/main and we walk through how to use it. We begin by installing `cfn-toml` through the CLI:
+
+![1 43 into Week 10-11 CFN Toml Part 1 install gem](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/420e0267-1071-4344-92bd-6c75d062ae5d)
+
+Then we add this to our `.gitpod.yml` so it's available to us readily from our workspace whenever we launch it. 
+
+![2 14 into Week 10-11 CFN Toml Part 1 adding gem install cfn-toml to gitpodyml](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/f388d8cf-fcd6-464a-8135-7737b1a57bfc)
+
+From here, we must define that `cfn-toml` file. In our `./aws/cfn/cluster` directory, we create `config.toml` and `config.toml.example` to show how to use it. 
+
+Here's `config.toml.example`:
+
+```toml
+[deploy]
+bucket = ''
+region = ''
+stack_name = ''
+
+[parameters]
+CertificateArn = ''
+```
+
+This gives us a point of reference for how to define our parameters in `config.toml`:
+
+```toml
+[deploy]
+bucket = 'jh-cfn-artifacts'
+region = 'us-east-1'
+stack_name = 'CrdCluster'
+
+[parameters]
+CertificateArn = 'arn:aws:acm:us-east-1:554621479919:certificate/9e966975-36c4-4808-ad6a-d20172eef714'
+NetworkingStack = 'CrdNet'
+```
+
+We now have to update our `cluster-deploy` script to implement these changes as well:
+
+```sh
+set -e #stop the execution of the script if it fails
+
+CFN_PATH="/workspace/aws-bootcamp-cruddur-2023/aws/cfn/cluster/template.yaml"
+CONFIG_PATH="/workspace/aws-bootcamp-cruddur-2023/aws/cfn/cluster/config.toml"
+
+cfn-lint $CFN_PATH 
+
+BUCKET=$(cfn-toml key deploy.bucket -t $CONFIG_PATH)
+REGION=$(cfn-toml key deploy.region -t $CONFIG_PATH)
+STACK_NAME=$(cfn-toml key deploy.stack_name -t $CONFIG_PATH)
+PARAMETERS=$(cfn-toml params v2 -t $CONFIG_PATH)
+
+aws cloudformation deploy \
+    --stack-name "CrdCluster" \
+    --s3-bucket $BUCKET \
+    --region $REGION \
+    --template-file $CFN_PATH \
+    --no-execute-changeset \
+    --tags group="cruddur-cluster" \
+    --parameter-overrides $PARAMETERS \
+    --capabilities CAPABILITY_NAMED_IAM
+```
+
+First, you can see we've updated the path for our `CONFIG_PATH` variable to point to our `config.toml` file. 
+
+```sh
+CONFIG_PATH="/workspace/aws-bootcamp-cruddur-2023/aws/cfn/cluster/config.toml"
+```
+
+Then, `cfn-toml` uses these lines to read the values from `config.toml`:
+
+```sh
+BUCKET=$(cfn-toml key deploy.bucket -t $CONFIG_PATH)
+REGION=$(cfn-toml key deploy.region -t $CONFIG_PATH)
+STACK_NAME=$(cfn-toml key deploy.stack_name -t $CONFIG_PATH)
+PARAMETERS=$(cfn-toml params v2 -t $CONFIG_PATH)
+```
+
+It retrieves the values for `deploy.bucket`, `deploy.region`, `deploy.stack_name`, and `params` and assigns them to the variables `BUCKET`, `REGION`, `STACK_NAME`, and `PARAMETERS`, respectively. We then pass these variables in our CFN deploy command:
+
+```sh
+aws cloudformation deploy \
+    --stack-name "CrdCluster" \
+    --s3-bucket $BUCKET \
+    --region $REGION \
+    --template-file $CFN_PATH \
+    --no-execute-changeset \
+    --tags group="cruddur-cluster" \
+    --parameter-overrides $PARAMETERS \
+    --capabilities CAPABILITY_NAMED_IAM
+```
+
+We run our `cluster-deploy` script just to make sure `cfn-toml` is working, and the changeset is created successfully. However, we're not wanting to execute the changeset yet as there's more alterations to be made, so instead we delete the `CrdCluster` stack from CloudFormation, while it's in the `REVIEW_IN_PROGRESS` state. 
+
+![4 15 into Week 10-11 CFN Toml Part 2 cluster deploy works but we delete the stack without executing change set](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/325d4f4f-8c0b-4322-a37a-dd9d4153841d)
+
+Knowing `cfn-toml` is working, we decide we want to implement this for our networking stack as well, so we tear this stack down from CloudFormation as well. Then we head back to our workspace and add a `config.toml` file to our `./aws/cfn/networking` directory, filling it in as we go: 
+
+```toml
+[deploy]
+bucket = 'jh-cfn-artifacts'
+region = 'us-east-1'
+stack_name = 'CrdNet'
+```
+
+Note, there's no external parameters we're needing here, we're just passing our `bucket`, `region`, and `stack_name` variables for use in the `networking-deploy` script. Speaking of which, we now update that: 
+
+```sh
+#! /usr/bin/env bash
+set -e #stop the execution of the script if it fails
+
+CFN_PATH="/workspace/aws-bootcamp-cruddur-2023/aws/cfn/networking/template.yaml"
+CONFIG_PATH="/workspace/aws-bootcamp-cruddur-2023/aws/cfn/networking/config.toml"
+
+cfn-lint $CFN_PATH
+
+BUCKET=$(cfn-toml key deploy.bucket -t $CONFIG_PATH)
+REGION=$(cfn-toml key deploy.region -t $CONFIG_PATH)
+STACK_NAME=$(cfn-toml key deploy.stack_name -t $CONFIG_PATH)
+
+aws cloudformation deploy \
+    --stack-name $STACK_NAME \
+    --s3-bucket $BUCKET \
+    --region $REGION \
+    --template-file $CFN_PATH \
+    --no-execute-changeset \
+    --tags group="cruddur-networking" \
+    --capabilities CAPABILITY_NAMED_IAM
+```
+
+You'll notice since there's no parameters to pass in the networking `config.toml`, we remove the `PARAMETERS` variable completely, along with the command for `--parameter-overrides`. If we left this, it would give us an error because there's no parameters to pass, as seen below: 
+
+![image](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/a82bef6f-8111-4f32-adad-2db1d4e766c1)
+
+We have also updated the `CONFIG_PATH` variable to the correct path for our networking `config.toml` file. 
+
+We re-deploy, running `networking-deploy` from the terminal, execute the changeset, and it creates successfully. We try `cluster-deploy` next. The changeset is created, but when we execute it from CloudFormation, it fails.
+
+![12 18 into Week 10-11 CFN Toml Part 2 security group is not valid](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/d1faf435-1b51-4404-9742-ef4451d81df0)
+
+We head over to CloudTrail in AWS to check on this error and find that the error occurred during the `CreateLoadBalancer` event:
+
+![2 29 into Week 10-11 - CFN Cluster Layer FInish ValidationException in CloudTrail Event History](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/f5f2f526-911d-43b6-b3dc-816f463274b6)
+
+We head back over to the cluster `template.yaml` and view the `SecurityGroups` property of our ALB. Everything appears correct in the code, so our attention is on the value being passed to `SecurityGroups` instead. 
+
+```yaml
+      SecurityGroups: 
+        - !Ref ALBSG
+      Subnets: !Split [",", !ImportValue { "Fn::Sub": "${NetworkingStack}SubnetIds" }]
+```
+
+After consulting AWS documentation, we find that the return value for the `!Ref` function should return us the logical ID of the resource. 
+
+![image](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/1654db0f-a869-4f02-a0ac-b890619dad31)
+
+That being said, for Security Groups, we need to pass the Group ID instead. Andrew had a bit of confusion on this, but I asked ChatGPT to clarify the difference.
+
+![image](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/cd59e380-0c6d-4fc5-be37-84192dc83158)
+
+The example ChatGPT used for Group ID clarifies this: "in security groups, a group ID is used to uniquely identify a security group within a VPC. The group ID is specific to the security group resource and is different from the logical ID assigned by CloudFormation."
+
+Since we're needing the Group ID, we must use the `Fn::GetAtt` function, specifying the `GroupId` attribute. 
+
+We delete the cluster stack from CloudFormation, then go back to our workspace and implement the change suggested by AWS documentation:
+
+```yaml
+      SecurityGroups: 
+        - !GetAtt ALBSG.GroupId
+```
+
+We again deploy our changeset to CloudFormation. A new error is returned.
+
+![6 32 into Week 10-11 - CFN Cluster Layer Finish a load balancer cannot be attached to multiple subnets in the same AZ](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/3c0c979f-4d15-4862-92e6-03a10a51fab2)
+
+There's something wrong with the configuration in our networking layer again. We review the Outputs of our networking stack from CloudFormation: 
+
+![image](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/f1ffa113-03d2-4b62-8b17-14b3dc77bae9)
+
+We're outputting all of our subnets, both private and public from our networking stack, then importing every single one into the cluster. We don't need to do this.  We only need our private subnets. We decide to go back to the `Outputs` section of our networking `template.yaml` and export the private and public subnets separately. 
+
+```yaml
+  PublicSubnetIds: 
+    Value: !Join 
+      - "," 
+      - - !Ref SubnetPub1 
+        - !Ref SubnetPub2 
+        - !Ref SubnetPub3
+    Export: 
+      Name: !Sub "${AWS::StackName}PublicSubnetIds"          
+  PrivateSubnetIds: 
+    Value: !Join 
+      - "," 
+      - - !Ref SubnetPriv1
+        - !Ref SubnetPriv2
+        - !Ref SubnetPriv3
+    Export: 
+      Name: !Sub "${AWS::StackName}PrivateSubnetIds"
+```
+
+We run `networking-deploy` again, then execute the changeset from CFN. This changeset completes quickly, as it's not changing anything, just adjusting the outputs:
+
+![image](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/862a4b7f-f50e-4929-8a45-2f342bc7ec9f)
+
+Back in our cluster `template.yaml` now, we adjust the value imported for our `Subnets` property.
+
+```yaml
+      Subnets: !Split [",", !ImportValue { "Fn::Sub": "${NetworkingStack}PublicSubnetIds" }]
+```
+
+We run `cluster-deploy`, execute the changeset for our cluster layer from CloudFormation, then view the error returned: 
+
+![12 30 into Week 10-11 - CFN Cluster Layer Finish security group does not belong to VPC](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/23d00e81-1786-4c60-8752-ad29f5f05541)
+
+To fix this, we go back into our cluster `template.yaml` and view the `ALBSG` security group we created previously. We're missing a property for `VpcId`. We add this, importing the value of `VpcId` from our networking stack.
+
+```yaml
+      VpcId: 
+        Fn::ImportValue:
+          !Sub ${NetworkingStack}VpcId 
+```
+
+We delete the cluster stack that did not complete successfully in CloudFormation, then run our `cluster-deploy` script once again. We execute this changeset from CloudFormation, and the stack deploys successfully. You can see the Description we set displayed in the Overview of the stack from CloudFormation.
+
+![17 53 into Week 10-11 - CFN Cluster Layer Finish CrdCluster Overview](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/9212e652-b4ef-4713-a238-c81001fcc601)
+
+This should complete the cluster layer! 
