@@ -8,8 +8,8 @@ Description: |
     - certificate attached from Amazon Certification Manager (ACM)
   - ALB Security Group
   - HTTPS Listener
-    - send naked domain to frontend Target Group
-    - send API subdomain to backed Target Group
+    - send root domain to frontend Target Group
+    - send API subdomain to backend Target Group
   - HTTP Listener
     - redirects to HTTPS Listener
   - Backend Target Group
