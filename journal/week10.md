@@ -1431,8 +1431,8 @@ At this point, we look at our existing `deploy` script for the backend service a
           Port: !Ref ContainerPort
           ContainerName: backend-flask
           ContainerPort: !Ref ContainerPort
-      ServiceName: backend-flask
-      TaskDefinition: backend-flask
+      ServiceName: !Ref ServiceName
+      TaskDefinition: !Ref TaskFamily
 ```
 
 We add a parameter to the `template.yaml` file for `ContainerPort`:
@@ -1455,5 +1455,649 @@ Parameters:
 We repeat the steps above, this time asking ChatGPT to convert the `backend-flask` task definition file to a CFN template. We again copy/paste the output to our workspace for our `TaskDefinition`, editing it as we go:
 
 ```yaml
-
+  TaskDefinition:
+    # https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-ecs-taskdefinition.html
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Ref TaskFamily
+      ExecutionRoleArn: arn:aws:iam::554621479919:role/CruddurServiceExecutionRole
+      TaskRoleArn: arn:aws:iam::554621479919:role/CruddurTaskRole
+      NetworkMode: awsvpc
+      Cpu: !Ref ServiceCpu
+      Memory: !Ref ServiceMemory
+      RequiresCompatibilities:
+        - FARGATE
+      ContainerDefinitions:
+        - Name: xray
+          Image: public.ecr.aws/xray/aws-xray-daemon
+          Essential: true
+          User: "1337"
+          PortMappings:
+            - Name: xray
+              ContainerPort: 2000
+              Protocol: udp
+        - Name: backend-flask
+          Image: !Ref EcrImage
+          Essential: true
+          HealthCheck:
+            Command:
+              - CMD-SHELL
+              - python /backend-flask/bin/health-check
+            Interval: 30
+            Timeout: 5
+            Retries: 3
+            StartPeriod: 60
+          PortMappings:
+            - Name: !Ref ContainerName
+              ContainerPort: !Ref ContainerPort
+              Protocol: tcp
+              AppProtocol: http
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: cruddur
+              awslogs-region: ${AWS::Region}
+              awslogs-stream-prefix: !Ref ServiceName
+          Environment:
+            - Name: OTEL_SERVICE_NAME
+              Value: !Ref EnvOtelServiceName
+            - Name: OTEL_EXPORTER_OTLP_ENDPOINT
+              Value: !Ref EnvOtelExporterOtlpEndpoint
+            - Name: AWS_COGNITO_USER_POOL_ID
+              Value: !Ref EnvAWSCognitoUserPoolId
+            - Name: AWS_COGNITO_USER_POOL_CLIENT_ID
+              Value: !Ref EnvCognitoUserPoolClientId
+            - Name: FRONTEND_URL
+              Value: !Ref EnvFrontendUrl
+            - Name: BACKEND_URL
+              Value: !Ref EnvBackendUrl
+            - Name: AWS_DEFAULT_REGION
+              Value: ${AWS::Region}
+          Secrets:
+            - Name: AWS_ACCESS_KEY_ID
+              ValueFrom: !Ref SecretsAWSAccessKeyId
+            - Name: AWS_SECRET_ACCESS_KEY
+              ValueFrom: !Ref SecretsSecretAccessKey
+            - Name: CONNECTION_URL
+              ValueFrom: !Ref SecretsConnectionUrl
+            - Name: ROLLBAR_ACCESS_TOKEN
+              ValueFrom: !Ref SecretsRollbarAccessToken
+            - Name: OTEL_EXPORTER_OTLP_HEADERS
+              ValueFrom: !Ref SecretsOtelExporterOtlpHeaders
 ```
+
+In this code snippet, we're defining our ECS task definition. We're specifying the properties and configuration of the task, along with container defintions, networking, resource allocation, logging, environment variables, and secrets. These values and configurations can be setup through click-ops using the AWS console as well.  
+
+Lots of parameters added for these values listed here, so we add them in addition to `ContainerPort` from earlier to our `template.yaml`. 
+
+```yaml
+  ServiceCpu:
+    Type: String
+    Default: '256'
+  ServiceMemory:
+    Type: String
+    Default: '512'
+  ServiceName:
+    Type: String
+    Default: backend-flask
+  ContainerName:
+    Type: String
+    Default: backend-flask
+  TaskFamily: 
+    Type: String
+    Default: backend-flask
+  EcrImage:
+    Type: String
+    Default: '554621479919.dkr.ecr.us-east-1.amazonaws.com/backend-flask'
+  EnvOtelServiceName:
+    Type: String
+    Default: backend-flask
+  EnvOtelExporterOtlpEndpoint:
+    Type: String
+    Default: 'https://api.honeycomb.io'
+  EnvAWSCognitoUserPoolId:
+    Type: String
+    Default: 'us-east-1_N7WWGl3KC'
+  EnvCognitoUserPoolClientId:
+    Type: String
+    Default: '575n8ecqc551iscnosab6e0un3'
+  EnvFrontendUrl:
+    Type: String
+    Default: 'https://thejoshdev.com'
+  EnvBackendUrl:
+    Type: String
+    Default: 'https://api.thejoshdev.com'
+  SecretsAWSAccessKeyId:
+    Type: String
+    Default: 'arn:aws:ssm:us-east-1:554621479919:parameter/cruddur/backend-flask/AWS_ACCESS_KEY_ID' 
+  SecretsSecretAccessKey:
+    Type: String
+    Default: 'arn:aws:ssm:us-east-1:554621479919:parameter/cruddur/backend-flask/AWS_SECRET_ACCESS_KEY'
+  SecretsConnectionUrl:
+    Type: String
+    Default: 'arn:aws:ssm:us-east-1:554621479919:parameter/cruddur/backend-flask/CONNECTION_URL'   
+  SecretsRollbarAccessToken:
+    Type: String
+    Default: 'arn:aws:ssm:us-east-1:554621479919:parameter/cruddur/backend-flask/ROLLBAR_ACCESS_TOKEN'  
+  SecretsOtelExporterOtlpHeaders:
+    Type: String
+    Default: 'arn:aws:ssm:us-east-1:554621479919:parameter/cruddur/backend-flask/OTEL_EXPORTER_OTLP_HEADERS' 
+```
+
+You'll notice in our `TaskDefinition` defined in the service template above is hardcoding our values for `TaskRoleArn` and `ExecutionRoleArn` currently. That's because we haven't defined IAM roles in our service template yet. We begin by defining our execution policy for our execution role. We navigate to IAM in AWS to view our existing execution policy to reference:
+
+```yaml
+Resources:
+  ExecutionPolicy:
+    # https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-iam-policy.html
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: cruddur-execution-policy
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: VisualEditor0
+            Effect: Allow
+            Action:
+              - ecr:GetAuthorizationToken
+              - ecr:BatchCheckLayerAvailability
+              - ecr:GetDownloadUrlForLayer
+              - ecr:BatchGetImage
+              - logs:CreateLogStream
+              - logs:PutLogEvents
+            Resource: "*"
+          - Sid: VisualEditor1
+            Effect: Allow
+            Action:
+              - ssm:GetParameters
+              - ssm:GetParameter
+            Resource: !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/cruddur/${ServiceName}/*'        
+```
+
+In this policy, we're defining the actions allowed for various AWS resources and services. Here's what we're allowing access to: 
+
+`ecr:GetAuthorizationToken`: Allows getting authorization tokens from Amazon Elastic Container Registry (ECR).
+
+`ecr:BatchCheckLayerAvailability`: Allows batch checking the availability of Docker image layers in ECR.
+
+`ecr:GetDownloadUrlForLayer`: Allows getting the download URL for a Docker image layer in ECR.
+
+`ecr:BatchGetImage`: Allows batch getting Docker images from ECR.
+
+`logs:CreateLogStream`: Allows creating log streams in Amazon CloudWatch Logs.
+
+`logs:PutLogEvents`: Allows putting log events into Amazon CloudWatch Logs.
+
+`ssm:GetParameters`: Allows getting parameters from AWS Systems Manager (SSM).
+
+`ssm:GetParameter`: Allows getting a specific parameter from AWS Systems Manager (SSM).
+
+We continue on, defining our role: 
+
+```yaml
+  ExecutionRole:
+    # https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-iam-role.html
+    Type: AWS::IAM::Role
+    Properties: 
+      RoleName: 'CruddurServiceExecutionRole'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: 'Allow'
+            Principal:
+              Service: 'ecs-tasks.amazonaws.com'
+            Action: 'sts:AssumeRole'
+      ManagedPolicyArns:
+        - !Sub 'arn:aws:iam::${AWS::AccountId}:policy/${ExecutionPolicy}'
+        - 'arn:aws:iam::aws:policy/CloudWatchLogsFullAccess'
+```
+
+In the IAM role we defined, we're allowing the ECS tasks service to assume the role. There's managed policies attached to grant access to specific permissions required for task execution, including the permissions defined in the referenced `ExecutionPolicy` parameter we defined above along with CloudWatch Logs access. 
+
+We're now able to reference the role in our `TaskDefinition` we defined earlier in the service `template.yaml`.
+
+```yaml
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Ref TaskFamily
+      ExecutionRoleArn: !GetAtt ExecutionRole.Arn
+      TaskRoleArn: !GetAtt TaskRole.Arn      
+```
+
+In the snippet above, we use the `!GetAtt` function to get the `Arn` attribute from the `ExecutionRole` property to define the value of `ExecutionRoleArn`. Although we haven't defined the `TaskRole` yet, we add the same for `TaskRoleArn`. 
+
+We should now be able to define our `TaskRole`. We again go to IAM in AWS to reference the existing task role and begin implementing:
+
+```yaml
+  TaskRole:
+    # https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-iam-role.html
+    Type: AWS::IAM::Role
+    Properties: 
+      RoleName: 'CruddurServiceTaskRole'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:  
+          - Effect: 'Allow'
+            Principal:
+              Service: 'ecs-tasks.amazonaws.com'
+            Action: 'sts:AssumeRole' 
+      ManagedPolicyArns:
+        - !Sub 'arn:aws:iam::${AWS::AccountId}:policy/${TaskPolicy}'
+        - 'arn:aws:iam::aws:policy/CloudWatchLogsFullAccess'
+        - 'arn:aws:iam::aws:policy/AWSXRayDaemonWriteAccess'
+```
+
+Very much like our `ExecutionRole` property above, we're allowing the ECS tasks service to assume the role. We're attached managed policies to grant specific permissions for tasks. This time, we're giving permissions for SSM messages, CloudWatch Logs access, and AWS X-Ray Daemon write access.
+
+Then we add the `TaskPolicy` to define the SSM message permissions:
+
+```yaml
+  TaskPolicy:
+    # https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-iam-policy.html
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: cruddur-task-policy
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: VisualEditor0
+            Effect: Allow
+            Action:
+              - ssmmessages:CreateControlChannel
+              - ssmmessages:CreateDataChannel
+              - ssmmessages:OpenControlChannel
+              - ssmmessages:OpenDataChannel
+            Resource: "*" 
+```
+
+Our service `template.yaml` looks to be good for now, so we move our attention to our `service-deploy` script. We begin by copying our existing `cluster-deploy` script and then editing it specific for the service layer instead: 
+
+```sh
+#! /usr/bin/env bash
+set -e #stop the execution of the script if it fails
+
+CFN_PATH="/workspace/aws-bootcamp-cruddur-2023/aws/cfn/service/template.yaml"
+CONFIG_PATH="/workspace/aws-bootcamp-cruddur-2023/aws/cfn/service/config.toml"
+
+cfn-lint $CFN_PATH 
+
+BUCKET=$(cfn-toml key deploy.bucket -t $CONFIG_PATH)
+REGION=$(cfn-toml key deploy.region -t $CONFIG_PATH)
+STACK_NAME=$(cfn-toml key deploy.stack_name -t $CONFIG_PATH)
+PARAMETERS=$(cfn-toml params v2 -t $CONFIG_PATH)
+
+aws cloudformation deploy \
+    --stack-name $STACK_NAME \
+    --s3-bucket $BUCKET \
+    --region $REGION \
+    --template-file $CFN_PATH \
+    --no-execute-changeset \
+    --tags group="cruddur-backend-flask" \
+    --parameter-overrides $PARAMETERS \    
+    --capabilities CAPABILITY_NAMED_IAM
+```
+
+We have adjusted the pathing for our `CFN_PATH` and `CONFIG_PATH` variables to reflect the service layer pathings. We also implement our `config.toml` file for the service layer as well: 
+
+```toml
+[deploy]
+bucket = 'jh-cfn-artifacts'
+region = 'us-east-1'
+stack_name = 'CrdSrvBackendFlask'
+```
+
+After running our `chmod u+x ./bin/cfn/service-deploy` to make our script executable, we run the `service-deploy` script. We begin working through a myriad of errors and warnings from `cfn-lint`. First, we realize we didn't define a value for the `Cluster` property of the `FargateService`. We import the value from our cluster stack.
+
+```yaml
+  FargateService:
+    # https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-ecs-service.html
+    Type: AWS::ECS::Service
+    Properties: 
+      Cluster: 
+        Fn::ImportValue:
+          !Sub "${ClusterStack}ClusterName"
+```
+
+Since we imported the value of the cluster name from our cluster stack, we have to go back to our cluster `template.yaml` to export it as well.
+
+```yaml
+Outputs:
+  ClusterName:
+    Value: !Ref FargateCluster
+    Export:
+      Name: !Sub "${AWS::StackName}ClusterName"  
+```
+
+With this change, before our service layer can be deployed, we have to redeploy the cluster layer for that Output. We run our `cluster-deploy` script again, then execute the changeset created from CloudFormation. When it completes, we have a status of `UPDATE_COMPLETE`, so we check out Outputs to make sure. 
+
+![image](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/2551b866-1ce4-4c8f-940d-82f669b96251)
+
+We now have the `ClusterName` as an Output. 
+
+We continue working through the errors for our service `template.yaml`:
+
+![image](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/eaa60d4f-a9c3-41d3-8828-2cee0f34fa32)
+
+We remove the `CidrIp` property from our `ServiceSG` as we no longer need it since we defined the value of `SourceSecurityGroupId` by importing the value from out cluster layer's ALB security group. 
+
+```yaml
+Resources:
+  ServiceSG:
+    # https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-properties-ec2-security-group.html
+    Type: AWS::EC2::SecurityGroup
+    Properties: 
+      GroupName: !Sub "${AWS::StackName}AlbSG"
+      GroupDescription: Public Facing SG for our Cruddur ALB
+      VpcId: 
+        Fn::ImportValue:
+          !Sub ${NetworkingStack}VpcId 
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          SourceSecurityGroupId:
+            Fn::ImportValue:
+              !Sub ${ClusterStack}ALBSecurityGroupId       
+          FromPort: 80
+          ToPort: 80
+          Description: ALB HTTP
+```
+
+![image](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/e711d2aa-4efe-4467-9c53-6d019cfc5505)
+
+There's also several missing values for properties of our `FargateService` that we need to define as well. We're not going to use `DeploymentConfiguration`, so we remove the property entirely. We then define values for `DeploymentController` and `DesiredCount`. 
+
+```yaml
+      DeploymentController: 
+        Type: ECS
+      DesiredCount: 1
+```
+
+![image](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/722f5876-f41b-4150-9371-45944fd27e95)
+
+We update the `HealthCheckGracePeriodSeconds` property of the `FargateService` to 0. 
+
+![image](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/3b1132ba-185b-4583-b8c5-2362b461ffb5)
+
+Our `TaskDefinition` is using embedded parameters outside of a function. We edit this to correct it for `awslogs-region` and the value of an env var defined under `Environment`.
+
+```yaml
+              awslogs-region: !Ref AWS::Region
+```
+
+```yaml
+            - Name: AWS_DEFAULT_REGION
+              Value: !Ref AWS::Region
+```
+
+![image](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/9356f0f3-04ab-4187-9332-3d83473c3050)
+
+To fix these errors, we decide to alter our existing policies to be inline with our roles. First the task role: 
+
+```yaml
+  TaskRole:
+    # https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-iam-role.html
+    Type: AWS::IAM::Role
+    Properties: 
+      RoleName: 'CruddurServiceTaskRole'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: 'Allow'
+            Principal:
+              Service: 'ecs-tasks.amazonaws.com'
+            Action: 'sts:AssumeRole'
+      Policies:
+        - PolicyName: 'cruddur-task-policy'
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: VisualEditor0
+                Effect: Allow
+                Action:
+                  - ssmmessages:CreateControlChannel
+                  - ssmmessages:CreateDataChannel
+                  - ssmmessages:OpenControlChannel
+                  - ssmmessages:OpenDataChannel
+                Resource: "*"              
+      ManagedPolicyArns:
+        - !Sub 'arn:aws:iam::${AWS::AccountId}:policy/${TaskPolicy}'
+        - 'arn:aws:iam::aws:policy/CloudWatchLogsFullAccess'
+        - 'arn:aws:iam::aws:policy/AWSXRayDaemonWriteAccess'
+```
+
+Then, the execution role: 
+
+```yaml
+  ExecutionRole:
+    # https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-iam-role.html
+    Type: AWS::IAM::Role
+    Properties: 
+      RoleName: 'CruddurServiceExecutionRole'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: 'Allow'
+            Principal:
+              Service: 'ecs-tasks.amazonaws.com'
+            Action: 'sts:AssumeRole'
+      Policies:
+        - PolicyName: 'cruddur-execution-policy'
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: VisualEditor0
+                Effect: Allow
+                Action:
+                  - ecr:GetAuthorizationToken
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:BatchGetImage
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: "*"
+              - Sid: VisualEditor1
+                Effect: Allow
+                Action:
+                  - ssm:GetParameters
+                  - ssm:GetParameter
+                Resource: !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/cruddur/${ServiceName}/*'            
+      ManagedPolicyArns:
+        - !Sub 'arn:aws:iam::${AWS::AccountId}:policy/${ExecutionPolicy}'
+        - 'arn:aws:iam::aws:policy/CloudWatchLogsFullAccess'
+```
+
+With these changes, we again try to run our `service-deploy` script:
+
+![image](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/ec8a142e-1f35-484b-b676-292e99bf7433)
+
+This error is coming from `cfn-toml`. We're not passing any parameters in our `config.toml` file, so we comment out the `PARAMETERS` variable pathing, and the command from the `service-deploy` script as well: 
+
+```sh
+#! /usr/bin/env bash
+set -e #stop the execution of the script if it fails
+
+CFN_PATH="/workspace/aws-bootcamp-cruddur-2023/aws/cfn/service/template.yaml"
+CONFIG_PATH="/workspace/aws-bootcamp-cruddur-2023/aws/cfn/service/config.toml"
+
+cfn-lint $CFN_PATH 
+
+BUCKET=$(cfn-toml key deploy.bucket -t $CONFIG_PATH)
+REGION=$(cfn-toml key deploy.region -t $CONFIG_PATH)
+STACK_NAME=$(cfn-toml key deploy.stack_name -t $CONFIG_PATH)
+#PARAMETERS=$(cfn-toml params v2 -t $CONFIG_PATH)
+
+aws cloudformation deploy \
+    --stack-name $STACK_NAME \
+    --s3-bucket $BUCKET \
+    --region $REGION \
+    --template-file $CFN_PATH \
+    --no-execute-changeset \
+    --tags group="cruddur-backend-flask" \
+    --capabilities CAPABILITY_NAMED_IAM
+    #--parameter-overrides $PARAMETERS \
+```
+
+With this error fixed, we again run `service-deploy`. This time, a changeset is created, so we head over to CloudFormation and execute it. When we check the Events tab of CloudFormation, we have a status of `CREATE_FAILED`.
+
+![image](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/484025cc-3a8f-4fc2-93a1-065dbf44d339)
+
+We knew this would happen, as the IAM role we're trying to create already exists with that same name. We delete the stack from CFN, then head over to IAM and delete the existing `CruddurServiceExecutionRole` and `CruddurTaskRole`. 
+
+![image](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/d5109d6f-cdc3-4f68-bea5-6576f8708f07)
+
+We run `service-deploy` again, then execute the changeset once more. This time, our create fails again, but for a different reason:
+
+![image](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/268b9882-22a0-4b6a-9798-6a575dd03a04)
+
+We go back to our `template.yaml` and find that we're still referencing the old policies we setup prior to making them inline for our task and execution roles. We remove these references:
+
+For our task role:
+
+![image](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/95edfd3a-9071-4f84-8426-7cc981708ccf)
+
+
+For our execution role: 
+
+![image](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/9aaeeb8a-332a-4afa-9789-fb8515be3744)
+
+We move back to CloudFormation, delete the service stack since it hasn't successfully deployed yet, then run our `service-deploy` script once more. We then execute the changeset from CloudFormation again: 
+
+![End of Week 10-11 CFN Service Layer target group does not exist](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/c66af6b8-49c7-4d88-83d3-be4bacb196c2)
+
+This is likely due to the value of the `TargetGroupArn` property of our `LoadBalancer` under `FargateService` is still a hard-coded value pulled from our existing task definition file earlier. We head back to our workspace and find this to be the case. 
+
+To fix the issue, we open our cluster `template.yaml` and add a couple of Outputs, as we're going to need target group ARN's for both our frontend and backend services. 
+
+```yaml
+  FrontendTGArn:
+    Value: !Ref FrontendTG
+    Export: 
+      Name: !Sub "${AWS::StackName}FrontendTGArn"
+  BackendTGArn:
+    Value: !Ref BackendTG
+    Export: 
+      Name: !Sub "${AWS::StackName}BackendTGArn"
+```
+
+Just so these outputs are available to us for our service layer, we must run `cluster-deploy` again and execute the changeset from CloudFormation. Since there's no infrastructure changes, the changeset completes successfully almost instantly. When we check our Outputs, we now have a `FrontendTGArn` and `BackendTGArn` listed for our cluster layer.  
+
+Now we can cross stack reference these Outputs in our service `template.yaml`. We fix the `TargetGroupArn` property for our `FargateService` load balancer. 
+
+```yaml
+      LoadBalancers:
+        - TargetGroupArn:
+            Fn::ImportValue:
+              !Sub "${ClusterStack}BackendTGArn"  
+```
+
+With these changes, we delete the service stack from CFN as it never successfully deployed, then run our `service-deploy` script again. In CloudFormation, we execute the changeset: 
+
+![6 35 into CFN ECS Fargate Service Debugging invalid request provided createservice error](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/c0a074d4-589a-4308-9734-cf3be828ddb5)
+
+We go ahead and tear down the stack since it didn't deploy, then head back over to our workspace and view our cluster `template.yaml`, specifically looking for our target group for the backend service. We're missing the `TargetType` property for our target groups.  We consult the AWS documentation on this:
+
+![8 04 into CFN ECS Fargate Service Debugging targettypeinstaceisdefault](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/8ca4d5c9-511e-43f9-a439-af3a2e6425ac)
+
+Since this value wasn't being set by us, for an application load balancer target group such as this, the default value of `TargetType` was set to `instance`, meaning the target group would target EC2 instances instead of our Fargate Service. We add this property for both the frontend and backend target groups, specifying `ip` as the value instead.
+
+```yaml
+      TargetType: ip
+```
+
+We again want to update our cluster layer, so we again run the `cluster-deploy` script, execute the changeset from CFN and wait for the results:
+
+![image](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/9ae6ac4a-2f4f-479f-bd22-2352605b26ef)
+
+We're getting errors that the target groups already exist and won't update. After a bit of research we find this is likely due to the name of the target group being defined. Since we provided the name in the template, CFN is erroring when trying to update because the name already exists. CloudFormation associates the logical ID with the resource. If the logical ID remains unchanged, CFN should recognize the resource is already created and update it. Since the name is defined already, AWS is basically telling us there's nothing to update. 
+
+Andrew said this is one of those cases where it's better not to provide our own name for the resource. We comment out the line of code defining the name of our target groups:
+
+```yaml
+      #Name: !Sub "${AWS::StackName}FrontendTG"
+```
+
+```yaml
+      #Name: !Sub "${AWS::StackName}BackendTG"
+```
+
+Instead, we decide to implement tags.
+
+```yaml
+      Tags: 
+        - Key: target-group-name
+          Value: frontend  
+```
+
+```yaml
+      Tags: 
+        - Key: target-group-name
+          Value: backend 
+```
+
+We again run the `cluster-deploy` script and execute the changeset from CloudFormation. The cluster stack shows `UPDATE_COMPLETE` status. Just to see the changes, we head over to EC2 in AWS to view our target groups and how they're now named: 
+
+![image](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/c40141b3-a20f-4107-8b40-08827a6fe8e8)
+
+When we select the backend target group, we're able to see our tags are applied successfully:
+
+![image](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/e1252d6b-96bc-4325-80e2-da3c5ae5e221)
+
+We head back over to our workspace and attempt to deploy our service stack via the `service-deploy` script. Then we execute the changeset from CloudFormation again. We have another `CREATE_FAILED` status:
+
+![image](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/cd051b2a-3018-49f1-8510-823d10c8bc2a)
+
+We open CloudTrail through AWS, and take a look at the `CreateService` action, as it's the last action that ran prior to the rollback.
+
+![image](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/897efdcf-5c07-43a0-b765-c41ffbb6858d)
+
+Andrew believes the issue is with the Service Connect for the backend service. We go back to our workspace and open our `./aws/json/service-backend-flask.json` file to view the existing configuration:
+
+![image](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/74cfc797-2d7a-4e11-9449-55273ad3b1b9)
+
+We compare this to the service `template.yaml` and how it was implemented. Our existing code makes use of the `ServiceRegistries` property for the `FargateService`. It has a `RegistryArn` property defined, so that would mean the service already exists, which it shouldn't. We're not even using the `ServiceConnectConfiguration` property. We comment out our `ServiceRegistries` property and instead define `ServiceConnectConfiguration`:
+
+```yaml
+      ServiceConnectConfiguration:
+          Enabled: true
+          Namespace: "cruddur"
+          # TODO - If you want to log
+          # LogConfiguration:
+          Services: 
+            - DiscoveryName: "backend-flask"
+              PortName: "backend-flask"
+              ClientAliases:
+                - Port: 4567
+
+      #ServiceRegistries:
+      #  - RegistryArn: !Sub 'arn:aws:servicediscovery:${AWS::Region}:${AWS::AccountId}:service/srv-cruddur-backend-flask'
+      #    Port: !Ref ContainerPort
+      #    ContainerName: backend-flask
+      #    ContainerPort: !Ref ContainerPort
+```
+
+We again delete the existing service stack from CloudFormation, then run `service-deploy` and execute the changeset. After an extended period of time, we refresh the Events tab of CloudFormation, but the `FargateService` is still being created by CloudFormation. We decide to head over to ECS in AWS instead to check the service. We can see already there's tasks failing. We click into one to see what's going on:
+
+![24 45 into CFN ECS Fargate Service Debugging taskfailedelbhealthcheck](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/0c234a58-1b0e-4784-ae0d-0269081f3c28)
+
+Andrew believes this could be due to an issue with the health check on the container is so fast that it does not detect when the app fails and/or issues with the ports for the security group. We head over to the security group for the backend service in EC2 and edit the Inbound Rules, opening up the ports for all traffic, just for testing purposes. Our tasks are still failing at this point. We decide to adjust our health check settings for the target group in EC2. We head over there, and select the Health Check tab for our backend target group then edit it manually through the console:
+
+![image](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/4a039a34-0fec-48a9-a311-e9c28955cded)
+
+Tasks are still failing. We attempt to run the backend service from our `./bin/backend/deploy` script updating the values to our existing layer information, but this fails. We update the `HealthCheckGracePeriodSeconds` property of our `FargateService` in the service template to 100 seconds, redeploy the service stack, and this makes no change. Our tasks are still failing.
+
+We're going to redeploy the service layer again, but prior to this, we are going to make sure to give access to the service security group for our database. We again access our service `template.yaml` and add an Output for the security group:
+
+```yaml
+Outputs: 
+  ServiceSecurityGroupId:
+    Value: !GetAtt ServiceSG.GroupId
+    Export:
+      Name: !Sub "${AWS::StackName}ServiceSecurityGroupId"
+```
+
+We deploy the service stack via `service-deploy` then execute the changeset. 
+
+After several tasks fail through ECS from our backend service, we head over to RDS to access our existing database, then access the existing security group for it, and edit the inbound rules to try and grant access to our service security group. AWS is unable to find our service security group. Andrew believes he knows why this is. The existing database security group is setup in the default VPC through AWS. Our service is setup in a different one altogether. 
+
+After many troubleshooting attempts, we find that the tasks are failing because of our existing PostGres database. The health check of the tasks are probably failing because the tasks are starting up while there's connection issues to the database as the service starts. The connection issue is because the database has no access to the service security group. Since we haven't setup our new database yet, this is going to continue to fail.  
+
+We're going to have to leave the service layer in an uncompleted state for now, and move onto the RDS layer, then we can circle back and complete the service layer at that time.
