@@ -1306,4 +1306,154 @@ We delete the cluster stack that did not complete successfully in CloudFormation
 
 ![17 53 into Week 10-11 - CFN Cluster Layer Finish CrdCluster Overview](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/9212e652-b4ef-4713-a238-c81001fcc601)
 
-This should complete the cluster layer! 
+This should complete the cluster layer, so we're now able to move onto our service layer. Before proceeding here, Andrew makes mention that he's deciding how we want to go about this. 
+
+The service layer could include task definitions, but we may want those in a separate CloudFormation template, as they could go through rapid iterations. Just as a general practice, at least from what I've studied on this, it can be beneficial to make a separate CFN template for task definitions and the service, as there's benefits in terms of modularity, reusability, and flexibility. We decide to take a look at our current task definition file for the the backend service. We decide to use it as a point of reference and include the task definitions in the same CFN template as the service.
+
+We begin by making a new folder in `./aws/cfn` named `service`, then populate the folder with several new files: `config.toml`, `config.toml.example`, and `template.yaml`. From our `./bin/cfn` directory, we create a new script file named `service-deploy`. Starting off in our service `template.yaml`, we begin fleshing it out, just the same as our previous CFN templates. 
+
+```yaml
+AWSTemplateFormatVersion: 2010-09-09
+Description: | 
+  Task Definition
+  Fargate Service
+  Execution Role
+  Task Role
+  
+Parameters: 
+  NetworkingStack:
+    Type: String  
+    Description: This is our base layer of networking components e.g. VPC, Subnets
+    Default: CrdNet
+  ClusterStack:
+    Type: String  
+    Description: This is our cluster layer e.g. ECS Cluster
+    Default: CrdCluster
+    
+Resources: 
+  ServiceSG:
+    # https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-properties-ec2-security-group.html
+    Type: AWS::EC2::SecurityGroup
+    Properties: 
+      GroupName: !Sub "${AWS::StackName}AlbSG"
+      GroupDescription: Public Facing SG for our Cruddur ALB
+      VpcId: 
+        Fn::ImportValue:
+          !Sub ${NetworkingStack}VpcId 
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          SourceSecurityGroupId:
+            Fn::ImportValue:
+              !Sub ${ClusterStack}ALBSecurityGroupId       
+          FromPort: 80
+          ToPort: 80
+          CidrIp: '0.0.0.0/0'
+          Description: ALB HTTP
+
+```
+
+You can see from above that we already are importing the value of the `VpcId` and the `ALBSecurityGroupId` from our networking layer and cluster layer respectively, so we added these stacks as parameters. We're using the networking layer's `VpcId`, so we must import the value as the the value of `VpcId` here. Under `SecurityGroupIngress`, we are defining the inbound rules of the security group, allowing incoming traffic from the cluster layer's security group. 
+
+We already know we're exporting the value of `VpcId` from our networking `template.yaml`. Since the cluster stack is referenced as a parameter here and we're importing the value as well, we must set this as an output from our cluster `template.yaml` and export it:
+
+```yaml
+Outputs:  
+  ALBSecurityGroupId:
+    Value: !GetAtt ALBSG.GroupId
+    Export:
+      Name: !Sub "${AWS::StackName}ALBSecurityGroupId"
+```
+
+We next begin working on the service itself in our `template.yaml` file. We look up the documentation through AWS, and are immediately hit with this "Important" disclaimer:
+
+![image](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/f01d5330-b568-4ef6-a223-08107d0127f8)
+
+What this message indicates is, in AWS CloudFormation, when you update a stack, any changes to a resource's properties that require replacement (meaning the resource must be recreated) can result in a failure if there is at least one AWS Service Discovery service (ServiceConnectService) configured for the ECS service. For further clarification, I asked ChatGPT the reason for this:
+
+"The reason for this is related to the uniqueness of service names within the AWS Service Discovery namespace. Each AWS Service Discovery service, which provides service discovery capabilities for ECS services, must have a unique name within the namespace. When AWS CloudFormation performs a stack update, it follows a sequence where it creates the replacement service first before deleting the original service.
+
+However, if there is at least one AWS Service Discovery service associated with the ECS service, the replacement service cannot have the same name as the original service due to the requirement for unique service names. This creates a conflict because AWS CloudFormation tries to create the replacement service with the same name, leading to a stack update failure."
+
+Andrew lets us know this is important information to keep in mind moving on. We continue on, creating our `FargateService`. There's a lot of properties to define here, so we start out just adding properties we know we're going to need. 
+
+```yaml
+  FargateService:
+    # https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-ecs-service.html
+    Type: AWS::ECS::Service
+    Properties: 
+      Cluster: 
+      DeploymentConfiguration:
+      DeploymentController: 
+      DesiredCount:
+      EnableECSManagedTags: true
+      EnableExecuteCommand: true
+      HealthCheckGracePeriodSeconds:
+      LaunchType: FARGATE
+      LoadBalancers: 
+        -
+      NetworkConfiguration:
+      PlatformVersion: LATEST
+      PropagateTags: TASK_DEFINITION
+      Role:   
+      ServiceConnectConfiguration:
+      ServiceName:
+```
+
+At this point, we look at our existing `deploy` script for the backend service and find the task definition file it references to create the service. We navigate to this task definition file and ask ChatGPT to convert the file into a CFN template. We use this output to begin populating the properties for `FargateService` in our service `template.yaml`. 
+
+```yaml
+  FargateService:
+    # https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-ecs-service.html
+    Type: AWS::ECS::Service
+    Properties: 
+      Cluster: 
+      DeploymentConfiguration:
+      DeploymentController: 
+      DesiredCount:
+      EnableECSManagedTags: true
+      EnableExecuteCommand: true
+      HealthCheckGracePeriodSeconds:
+      LaunchType: FARGATE
+      LoadBalancers:
+        - TargetGroupArn: arn:aws:elasticloadbalancing:us-east-1:554621479919:targetgroup/cruddur-backend-flask-tg/894e612b59521c2c
+          ContainerName: backend-flask
+          ContainerPort: !Ref ContainerPort
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: ENABLED
+          SecurityGroups:
+            - !GetAtt ServiceSG.GroupId
+          Subnets: !Split [",", !ImportValue { "Fn::Sub": "${NetworkingStack}PublicSubnetIds" }]
+      PlatformVersion: LATEST
+      PropagateTags: SERVICE
+      ServiceRegistries:
+        - RegistryArn: !Sub 'arn:aws:servicediscovery:${AWS::Region}:${AWS::AccountId}:service/srv-cruddur-backend-flask'
+          Port: !Ref ContainerPort
+          ContainerName: backend-flask
+          ContainerPort: !Ref ContainerPort
+      ServiceName: backend-flask
+      TaskDefinition: backend-flask
+```
+
+We add a parameter to the `template.yaml` file for `ContainerPort`:
+
+```yaml
+Parameters:
+  NetworkingStack:
+    Type: String  
+    Description: This is our base layer of networking components e.g. VPC, Subnets
+    Default: CrdNet
+  ClusterStack:
+    Type: String  
+    Description: This is our cluster layer e.g. ECS Cluster
+    Default: CrdCluster
+  ContainerPort:
+    Type: Number
+    Default: 4567
+```
+
+We repeat the steps above, this time asking ChatGPT to convert the `backend-flask` task definition file to a CFN template. We again copy/paste the output to our workspace for our `TaskDefinition`, editing it as we go:
+
+```yaml
+
+```
