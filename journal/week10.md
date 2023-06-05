@@ -2100,4 +2100,297 @@ After several tasks fail through ECS from our backend service, we head over to R
 
 After many troubleshooting attempts, we find that the tasks are failing because of our existing PostGres database. The health check of the tasks are probably failing because the tasks are starting up while there's connection issues to the database as the service starts. The connection issue is because the database has no access to the service security group. Since we haven't setup our new database yet, this is going to continue to fail.  
 
-We're going to have to leave the service layer in an uncompleted state for now, and move onto the RDS layer, then we can circle back and complete the service layer at that time.
+We're going to have to leave the service layer in an uncompleted state for now, and move onto the RDS layer, then we can circle back and complete the service layer at that time. We go ahead and delete the service layer stack from CloudFormation. 
+
+We begin the RDS layer by creating a new folder in the `./aws/cfn` directory named `db`. We create a new `template.yaml` in this folder as well. We begin as always, fleshing out the RDS template.
+
+```yaml
+AWSTemplateFormatVersion: 2010-09-09
+Description: |
+  The primary Postgres RDS Database for the application
+  - RDS Instance
+  - Database Security Group
+  - DBSubnetGroup
+  
+  Parameters:
+  Resources:
+#Outputs: 
+#  ServiceSecurityGroupId:
+#    Value: !GetAtt ServiceSG.GroupId
+#    Export:
+#      Name: !Sub "${AWS::StackName}ServiceSecurityGroupId"
+```
+
+Andrew notes that we want the security group from our service layer, but just in case we end up not needing it, we will comment it out for now. Next we bring in our RDS instance: 
+
+```yaml
+Resources:
+  # https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-rds-dbinstance.html
+  Type: AWS::RDS::DBInstance
+  # https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-attribute-deletionpolicy.html
+  DeletionPolicy: 'Snapshot'
+  # https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-attribute-updatereplacepolicy.html
+  UpdateReplacePolicy: 'Snapshot'
+  Properties: 
+    AllocatedStorage: '20'
+    AllowMajorVersionUpgrade: true
+    AllowMinorVersionUpgrade: true
+    BackupRetentionPeriod: !Ref BackupRetentionPeriod
+    DBInstanceClass: !Ref DBInstanceClass
+```
+
+Let's break down those properties:
+
+`AllocatedStorage`: This property specifies the amount of storage allocated for the RDS database instance. In this case, it is set to '20', indicating 20 gigabytes of storage. This keeps us in the free tier of AWS. 
+
+`AllowMajorVersionUpgrade`: This property determines whether major version upgrades are allowed for the database engine. When set to `true`, it allows the RDS instance to be upgraded to a new major version when available.
+
+`AllowMinorVersionUpgrade`: This property determines whether minor version upgrades are allowed for the database engine. When set to `true`, it allows the RDS instance to be upgraded to a new minor version when available.
+
+`BackupRetentionPeriod`: This property specifies the number of days to retain automated backups of the database. 
+
+`DBInstanceClass`: This property specifies the instance class for the RDS database instance. 
+
+You may have noticed we referenced parameters for the `BackupRetentionPeriod` and `DBInstanceClass` properties. We add these parameters as well:
+
+```yaml
+Parameters:
+  BackupRetentionPeriod:
+    Type: Number
+    Default: 0
+  DBInstanceClass: 
+    Type: String
+    Default: db.t4g.micro
+```
+
+The `BackupRetentionPeriod` default value of 0 is not optimal for production environments, as you may want to retain automated backups of your database for data recovery, compliance and regulation requirements, operational best practices, or testing and developement purposes. We are simply setting it this way to remain in the free tier of AWS. 
+
+We also have set the `InstanceClass` parameter that we reference for the `InstanceClass` property to `db.t4g.micro`, which, according to AWS documentation is "designed for workloads with lower resource requirements and intermittent usage patterns. It can be a cost-effective choice for smaller applications or development/testing environments where consistent high CPU performance is not required."
+
+We continue on, adding and adjusting properties to our RDS `template.yaml` . 
+
+```yaml
+  Database:
+    # https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-rds-dbinstance.html
+    Type: AWS::RDS::DBInstance
+    # https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-attribute-deletionpolicy.html
+    DeletionPolicy: 'Snapshot'
+    # https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-attribute-updatereplacepolicy.html
+    UpdateReplacePolicy: 'Snapshot'
+    Properties: 
+      AllocatedStorage: '20'
+      AllowMajorVersionUpgrade: true
+      AutoMinorVersionUpgrade: true
+      BackupRetentionPeriod: !Ref BackupRetentionPeriod
+      DBInstanceClass: !Ref DBInstanceClass
+      DBInstanceIdentifier: !Ref DBInstanceIdentifier
+      DBName: !Ref DBName
+      DBSubnetGroupName: !Ref DBSubnetGroup
+
+```
+
+We've added a few properties to the `DBInstance`, and we've also given it a reference of `Database`. Here's a bit more on the added properties:
+
+`DBInstanceIdentifier`: This property specifies the identifier for the Amazon RDS database instance. The identifier is a user-defined name that identifies the RDS instance within our AWS account.
+
+`DBName`: This property specifies the name of the initial database that will be created in the Amazon RDS instance. When the RDS instance is provisioned, this database will be created and available for use.
+
+`DBSubnetGroupName`: This property specifies the name of the DB subnet group associated with the RDS instance. A DB subnet group is a collection of subnets in our VPC where RDS instances can be created. The subnet group defines the network configuration for the RDS instance, including the availability zones and subnets where the instance will be placed.
+
+We also add parameters for these properties:
+
+```yaml
+  DBInstanceIdentifier: 
+    Type: String
+    Default: cruddur-instance
+  DBName: 
+    Type: String
+    Default: cruddur
+```
+
+As for `DBSubnetGroup`, it's an AWS resource we must define, so we start on it in our RDS `template.yaml`. 
+
+```yaml
+DBSubnetGroup:
+    # https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-rds-dbsubnetgroup.html
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+
+```
+
+We move back to our RDS instance and continue on, defining more properties: 
+
+```yaml
+  Database:
+    # https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-rds-dbinstance.html
+    Type: AWS::RDS::DBInstance
+    # https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-attribute-deletionpolicy.html
+    DeletionPolicy: 'Snapshot'
+    # https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-attribute-updatereplacepolicy.html
+    UpdateReplacePolicy: 'Snapshot'
+    Properties: 
+      AllocatedStorage: '20'
+      AllowMajorVersionUpgrade: true
+      AutoMinorVersionUpgrade: true
+      BackupRetentionPeriod: !Ref BackupRetentionPeriod
+      DBInstanceClass: !Ref DBInstanceClass
+      DBInstanceIdentifier: !Ref DBInstanceIdentifier
+      DBName: !Ref DBName
+      DBSubnetGroupName: !Ref DBSubnetGroup
+      DeletionProtection: !Ref DeletionProtection
+      EnablePerformanceInsights: true
+      Engine: postgres
+      EngineVersion: !Ref EngineVersion
+
+# Must be 1 to 63 letters or numbers.
+# First character must be a letter.
+# Can't be a reserved word for the chosen database engine.
+      MasterUsername:  !Ref MasterUsername
+      # Constraints: Must contain from 8 to 128 characters.
+      MasterUserPassword: !Ref MasterUserPassword
+      PubliclyAccessible: true
+      VPCSecurityGroups:
+        - !GetAtt RDSPostgresSG.GroupId 
+```
+
+More on the new properties we added: 
+
+`DeletionProtection`: This property enables deletion protection for the RDS instance. When deletion protection is enabled, it prevents accidental deletion of the RDS instance. 
+
+`EnablePerformanceInsights`: This property enables Performance Insights for the RDS instance. Performance Insights is a feature that helps you monitor the performance of your RDS database. 
+
+`Engine`: This property specifies the database engine to be used for the RDS instance. In our case, it is set to postgres, indicating that PostgreSQL will be used as the database engine.
+
+`EngineVersion`: This property specifies the version of the database engine to be used. 
+
+`MasterUsername`: This property specifies the username for the master user of the RDS instance. The master user has administrative privileges and is used to manage the database.
+
+`MasterUserPassword`: This property specifies the password for the master user of the RDS instance. As we commented in the code, the `MasterUserPassword` must contain from 8 to 128 characters.
+
+`PubliclyAccessible`: This property determines whether the RDS instance can be accessed publicly over the internet. Setting it to `true` allows public access, while setting it to `false` restricts access to within the VPC.
+
+`VPCSecurityGroups`: This property specifies the VPC security groups associated with the RDS instance.
+
+We also add additional parameters for the properties that reference them, but we'll come back to `MasterUsername` and `MasterUserPassword`:
+
+```yaml
+ DeletionProtection:
+    Type: String
+    AllowedValues:
+      - true
+      - false
+    Default: true
+  EngineVersion: 
+    Type: String
+    #  DB Proxy only supports very specific versions of Postgres
+    #  https://stackoverflow.com/questions/63084648/which-rds-db-instances-are-supported-for-db-proxy
+    Default: '15.2'
+```
+
+We move back to the `DBSubnetGroup` we started and continue on adding properties for that resource: 
+
+```yaml
+  DBSubnetGroup:
+    # https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-rds-dbsubnetgroup.html
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupName: !Sub "${AWS::StackName}DBSubnetGroup"
+      DBSubnetGroupDescription: !Sub "${AWS::StackName}DBSubnetGroup"
+      SubnetIds: { 'Fn::Split' : [ ','  , { "Fn::ImportValue": { "Fn::Sub": "${NetworkingStack}PublicSubnetIds" }}] }
+```
+
+`DBSubnetGroupName`: we're defining the name of our DB subnet group. It's going to substitute the property value with the stack name followed by "DBSubnetGroup"
+
+`DBSubnetGroupDescription`: we are defining the description of the DB subnet group here. It's value is the same as `DBSubnetGroupName`
+
+`SubnetIds`: we're defining the list of subnet IDs that will be associated with the DB subnet group. We're importing the value from the network layer for the `PublicSubnetIds` property. Using the `Fn::Split` function, we're splitting the retrieved subnet IDs from `PublicSubnetIds` and creating a list.
+
+To use the `PublicSubnetIds` property for `SubnetIds`, we add the network layer as a parameter, as we did previously in our cluster layer.
+
+```yaml
+Parameters:
+  NetworkingStack:
+    Type: String  
+    Description: This is our base layer of networking components e.g. VPC, Subnets
+    Default: CrdNet
+```
+
+We now move onto our `RDSPostgresSG` security group and continue working on that in our RDS `template.yaml`: 
+
+```yaml
+  RDSPostgresSG: 
+    # https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-properties-ec2-security-group.html
+    Type: AWS::EC2::SecurityGroup
+    Properties: 
+      GroupName: !Sub "${AWS::StackName}AlbSG"
+      GroupDescription: Public Facing SG for our Cruddur ALB
+      VpcId: 
+        Fn::ImportValue:
+          !Sub ${NetworkingStack}VpcId 
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          SourceSecurityGroupId:
+            Fn::ImportValue:
+              !Sub ${ClusterStack}ServiceSecurityGroupId       
+          FromPort: 5432
+          ToPort: 5432
+          Description: ALB HTTP 
+```
+No need to break down these properties, we've already seen a security group. You might notice however that `SourceSecurityGroupId` property is importing the value of `ServiceSecurityGroupId` from the cluster stack. We have not yet created this yet. 
+
+Andrew explains: "When we launch our service, its supposed to have access to this(Postgres security group) so we're supposed to add it here. The problem is we've yet to create our service, but we're setting this up right now. We need to have already in place, the service security group."
+
+This should resolve the issue we were running into with our service layer being deployed to CloudFormation. We go ahead and move back to our cluster `template.yaml` and add the security group:
+
+```yaml
+# We have to create this SG before the service so we can pass it to database SG
+  ServiceSG:
+    # https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-properties-ec2-security-group.html
+    Type: AWS::EC2::SecurityGroup
+    Properties: 
+      GroupName: !Sub "${AWS::StackName}ServSG"
+      GroupDescription: Security for Fargate Services for Cruddur
+      VpcId: 
+        Fn::ImportValue:
+          !Sub ${NetworkingStack}VpcId 
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          SourceSecurityGroupId: !GetAtt ALBSG.GroupId
+          FromPort: 80
+          ToPort: 80
+          Description: ALB HTTP
+```
+
+We're adding access to our existing `ALBSG` through use of the `SourceSecurityGroupId` property value. Since it's within the same stack, we're using `!GetAtt` to retrieve the attribute `GroupId` from `ALBSG`. We also access the `ServiceSG` from our service `template.yaml` and completely remove it, as it's now being defined in our RDS layer instead. Since we're still going to need to define the security group in our service layer, we need to export `ServiceSG` from our cluster `template.yaml`.
+
+```yaml
+  ServiceSecurityGroupId:
+    Value: !GetAtt ServiceSG.GroupId
+    Export:
+      Name: !Sub "${AWS::StackName}ServiceSecurityGroupId"
+```
+
+Since we're going to import this value in our RDS layer, we must add the `ClusterStack` to our parameters in the RDS `template.yaml`:
+
+```yaml
+  ClusterStack:
+    Type: String
+    Description: This is our FargateCluster
+    Default: CrdCluster
+```
+
+We move back over to our RDS `template.yaml` again and come back to the `MasterUsername` and `MasterUserPassword` properties of our `Database`. We use the `!Ref` function to pass values for both properties using parameters. We name the parameters according to the property name, then define the parameters:
+
+```yaml
+  MasterUsername:
+    Type: String
+  MasterUserPassword:
+    Type: String
+    NoEcho: true
+```
+
+We're using the `NoEcho` parameter property for the `MasterUserPassword` after consulting AWS documentation for this. According to AWS, "Whether to mask the parameter value to prevent it from being displayed in the console, command line tools, or API. If you set the `NoEcho` attribute to `true`, CloudFormation returns the parameter value masked as asterisks for any calls that describe the stack or stack events,".
+
+With that, we have 
+
+
