@@ -34,7 +34,7 @@ Parameters:
     Default: "/"
   FrontendHealthCheckPort: 
     Type: String
-    Default: 80
+    Default: 4567
   FrontendHealthCheckProtocol: 
     Type: String
     Default: HTTP
