@@ -1308,6 +1308,8 @@ We delete the cluster stack that did not complete successfully in CloudFormation
 
 This should complete the cluster layer, so we're now able to move onto our service layer. Before proceeding here, Andrew makes mention that he's deciding how we want to go about this. 
 
+## Service Layer
+
 The service layer could include task definitions, but we may want those in a separate CloudFormation template, as they could go through rapid iterations. Just as a general practice, at least from what I've studied on this, it can be beneficial to make a separate CFN template for task definitions and the service, as there's benefits in terms of modularity, reusability, and flexibility. We decide to take a look at our current task definition file for the the backend service. We decide to use it as a point of reference and include the task definitions in the same CFN template as the service.
 
 We begin by making a new folder in `./aws/cfn` named `service`, then populate the folder with several new files: `config.toml`, `config.toml.example`, and `template.yaml`. From our `./bin/cfn` directory, we create a new script file named `service-deploy`. Starting off in our service `template.yaml`, we begin fleshing it out, just the same as our previous CFN templates. 
@@ -2102,6 +2104,8 @@ After many troubleshooting attempts, we find that the tasks are failing because 
 
 We're going to have to leave the service layer in an uncompleted state for now, and move onto the RDS layer, then we can circle back and complete the service layer at that time. We go ahead and delete the service layer stack from CloudFormation. 
 
+## Database (RDS) Layer
+
 We begin the RDS layer by creating a new folder in the `./aws/cfn` directory named `db`. We create a new `template.yaml` in this folder as well. We begin as always, fleshing out the RDS template.
 
 ```yaml
@@ -2138,8 +2142,13 @@ Resources:
     BackupRetentionPeriod: !Ref BackupRetentionPeriod
     DBInstanceClass: !Ref DBInstanceClass
 ```
+You might notice some particular properties of the `Resources`. Let's break those down a bit here: 
 
-Let's break down those properties:
+`DeletionPolicy`: Specifies the deletion policy for the resource, which is set to 'Snapshot'. This means that when the resource is deleted, a final snapshot will be created before deletion.
+
+`UpdateReplacePolicy`: Specifies the update/replace policy for the resource, which is set to 'Snapshot'. This means that when the resource is updated, it will be replaced with a new resource and a snapshot of the old resource will be created.
+
+Let's break down the rest of the properties:
 
 `AllocatedStorage`: This property specifies the amount of storage allocated for the RDS database instance. In this case, it is set to '20', indicating 20 gigabytes of storage. This keeps us in the free tier of AWS. 
 
@@ -2391,6 +2400,1460 @@ We move back over to our RDS `template.yaml` again and come back to the `MasterU
 
 We're using the `NoEcho` parameter property for the `MasterUserPassword` after consulting AWS documentation for this. According to AWS, "Whether to mask the parameter value to prevent it from being displayed in the console, command line tools, or API. If you set the `NoEcho` attribute to `true`, CloudFormation returns the parameter value masked as asterisks for any calls that describe the stack or stack events,".
 
-With that, we have 
+With that, we have defined parameters not explicitly set in the `Parameters` field of the RDS template. For these, we create another `config.toml` file, in our `./aws/cfn/db` directory and implement it: 
 
+```toml
+[deploy]
+bucket = 'jh-cfn-artifacts'
+region = 'us-east-1'
+stack_name = 'CrdDb'
+
+[parameters]
+NetworkingStack = 'CrdNet'
+ClusterStack = 'CrdCluster'
+MasterUsername = 'root'
+```
+
+We're not passing a parameter for `MasterUserPassword` because that's sensitive information we don't want to show. We will handle this in a moment. For now, we move onto creating our RDS script, so we navigate to our `./bin/cfn` directory and create a new script named `db-deploy`. 
+
+```sh
+#! /usr/bin/env bash
+set -e #stop the execution of the script if it fails
+
+CFN_PATH="/workspace/aws-bootcamp-cruddur-2023/aws/cfn/db/template.yaml"
+CONFIG_PATH="/workspace/aws-bootcamp-cruddur-2023/aws/cfn/db/config.toml"
+
+cfn-lint $CFN_PATH 
+
+BUCKET=$(cfn-toml key deploy.bucket -t $CONFIG_PATH)
+REGION=$(cfn-toml key deploy.region -t $CONFIG_PATH)
+STACK_NAME=$(cfn-toml key deploy.stack_name -t $CONFIG_PATH)
+PARAMETERS=$(cfn-toml params v2 -t $CONFIG_PATH)
+
+aws cloudformation deploy \
+    --stack-name $STACK_NAME \
+    --s3-bucket $BUCKET \
+    --region $REGION \
+    --template-file $CFN_PATH \
+    --no-execute-changeset \
+    --tags group="cruddur-db" \
+    --parameter-overrides $PARAMETERS MasterUserPassword=$DB_PASSWORD \
+    --capabilities CAPABILITY_NAMED_IAM
+```
+
+The script is very much like our other scripts. We've updated `CFN_PATH` and `CONFIG_PATH` to the pathing for our RDS template and RDS `config.toml` file respectively. You will also notice that we're overriding the parameter for `MasterUserPassword` with the value of the env var `$DB_PASSWORD` by way of the `--parameter-overrides` command. 
+
+From there, we now need to set the `$DB_PASSWORD` env var from our terminal. I'll redact my Postgres database password and instead use "example" for reference point here: 
+
+```sh
+export DB_PASSWORD=example
+gp env DB_PASSWORD=example
+```
+
+Our RDS layer looks to be nearing completion. With that, the `Outputs` parameters we have added to our cluster `template.yaml` will need to be available to us before we can deploy the RDS layer. So we redeploy the cluster layer, running `cluster-deploy`. Then we execute the changeset created from CloudFormation. 
+
+![image](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/30809d18-bd65-4af5-8d6d-7ef057fa44b0)
+
+The cluster layer updates successfully. We make the RDS script executable by chmod'ing the file: `chmod u+x ./bin/cfn/db-deploy`, then we run the script. Andrew receives an error from `cfn-lint`, as he's implemented the `DBSubnetGroup` resource property `SubnetIds` using multiple lines.
+
+![image](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/1347a1d1-9603-413d-8bb4-0615ea0b9a2a)
+
+![image](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/48571a74-2831-4d2b-9060-4334b35cae39)
+
+My changeset is created successfully however, due to implementing the `SubnetIds` in one line:
+
+```yaml
+SubnetIds: { 'Fn::Split' : [ ','  , { "Fn::ImportValue": { "Fn::Sub": "${NetworkingStack}PublicSubnetIds" }}] }
+```
+
+Andrew adjusts his `SubnetIds` to the same as mine, and informs us that this is the exact example he's been telling us about where sometimes certain functions will not work inside of other ones. In these cases, you have to use the `.json` equivalent of the function instead of the `.yaml` version. (i.e. Fn::Sub instead of !Sub )
+
+We execute the changeset from CloudFormation. 
+
+![image](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/c89d58ab-f3a3-49d4-9165-3bf6d12fbe74)
+
+Our database has been created successfully. We select the `cruddur-instance` resource from CloudFormation which redirects us to RDS in AWS. 
+
+![image](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/bf0e3af0-f040-4670-b99f-51c4bd36eb7f)
+
+You can see that we now have our original database, `cruddur-db-instance` and our new database, `cruddur-instance`. There's no data in our new one yet, Andrew mentions we COULD load a snapshot to prefill our data, but instead we're likely going to reseed it at a later time. Andrew also lets us know that the `CONNECTION_URL` to our database is going to be a bit different as well, so we navigate over to AWS System Manager, then Parameter Store to update this parameter. 
+
+![42 56 into CFN RDS Finish ConnectionURLParameter](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/ed158eaf-d361-4312-86e8-d9ef1c568caf)
+
+This should complete our RDS layer. Now that it's implemented and deployed, we can now go back and fix our service layer, as we should have the resources available in the same VPC (security group we added) to fix the health checks passing on our service tasks. 
+
+## Service Layer: First Blood Part II
+
+We begin by going back to our service `template.yaml`, as we need to reference the security group we created in our cluster layer. We're already referencing the `ClusterStack` as a parameter, so we import the value of the `ServiceSecurityGroupId` for the `SecurityGroups` property of the `FargateService` resource. 
+
+```yaml
+          SecurityGroups:
+            - Fn::ImportValue:
+                !Sub "${ClusterStack}ServiceSecurityGroupId"
+```
+
+We again run the `service-deploy` script, but a changeset is not created. Instead, we receive an error: 
+
+![image](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/5abc53d1-af9a-4128-be2a-80b2428816c5)
+
+The error is because we're still exporting the value of `ServiceSecurityGroupId` from our service `template.yaml`, but we've since removed that security group from the service template and implemented it in our cluster layer instead. We fix the error by removing the `Outputs` on our service `template.yaml`. 
+
+![image](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/3377dfcd-87ae-4547-88cc-fef1adfb50b4)
+
+We again run `./bin/cfn/service-deploy` and this time a changeset is created. We move over to CFN and execute it. After a bit of time, we check our Events tab in CloudFormation on the service stack and see most of the resources with a status of `CREATE_COMPLETE`. The service itself is still in a `CREATE_IN_PROGRESS` status. We move over to ECS to view the backend service. 
+
+![image](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/029ce7a4-57cf-41b3-9c0e-355d4600e544)
+
+We've already had 2 tasks fail, so the service still isn't working. When we check the logs, they're passing the container health checks:
+
+![image](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/e789a60c-3631-4868-b32e-72024c7ce0ae)
+
+We check the security group of the service in EC2, checking the inbound rules. It's using port 80.
+
+![image](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/db3e6c72-336c-418c-a133-758fef14adba)
+
+We move over to RDS to check the database security group, redirecting back to EC2 again. Then, we look at the inbound rules for the database:
+
+![image](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/04e7b4ce-02e7-4bb0-a526-6c2ab6b21440)
+
+The inbound rules to the database are setup correctly. It's opening port 5432 (Postgres port) to our `CrdClusterServSG`. 
+
+We head back over to our backend service and view one of the failed tasks, and it's still failing the ELB health checks. 
+
+In attempts to troubleshoot the issue, we update the inbound rules for the backend service SG to allow all traffic from everywhere, but this makes no change. When we check the tasks from the backend target group in EC2, the task is still showing unhealthy. 
+
+We edit the inbound rules of the `CrdDbAlbSG` to open port 5432 (Postgres port) to the internet (0.0.0.0/0). Tasks are still showing unhealthy. 
+
+We head back over to the security group of our original database in EC2 and edit the inbound rules to open port 5432 (Postgres port) to the internet (0.0.0.0/0) just like `CrdDbAlbSG`. We also head back over to Systems Manager, then Parameter Store and adjust the `CONNECTION_URL` parameter back to its original value to see if we can at least get it working with the original database. This still did not fix the issue. 
+
+We revert the troubleshooting changes we made to our inbound rules and set the `CONNECTION_URL` parameter back to the new database endpoint settings. Next, we head back over to our workspace and access the cluster `template.yaml`. We update the `ServiceSG` properties `FromPort` and `ToPort` for `SecurityGroupIngress`, as these values were originally set to 80 :
+
+```yaml
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          SourceSecurityGroupId: !GetAtt ALBSG.GroupId
+          FromPort: !Ref BackendPort
+          ToPort: !Ref BackendPort
+```
+
+We're referencing the `BackendPort` parameter, which is set to 4567, as seen in the cluster layer's `Parameters`:
+
+```yaml
+  BackendPort:
+    Type: Number
+    Default: 4567  
+```
+
+We also make sure the `Port` property for the `BackendTG` is set to port 4567 as well:
+
+![image](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/3cf076a4-95c9-4f96-914f-0e902e7e9e7e)
+
+It's also referencing `BackendPort`, so we're good here. With these changes implemented, we must redploy the cluster layer again. First, we tear down the existing service stack from CFN, then run our `cluster-deploy` script and execute the changeset. When this updates successfully, we run our `service-deploy` script again as well. We execute this changeset from CloudFormation, and let the resources be created. After a bit of time, we head over to ECS and check the status of any tasks running from our backend service:
+
+![11 30 into CFN Service Fixed healthchecksarepassing](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/d79eb92c-f54d-4ccc-94c2-b6eed5f19c3d)
+
+Our health checks are now showing as healthy! With this change, our old database is no longer needed. We head over to RDS and delete the existing `cruddur-db-instance` database:
+
+![image](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/6e169b9c-5ea0-4733-912c-f13b8725d57c)
+
+Back in CloudFormation, the service stack is now created as well:
+
+![13 13 into CFN Service Fixed servicelayercompletecreation](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/9633604d-839f-4599-a600-93cfd5c5669d)
+
+We test our endpoint by navigating to api.thejoshdev.com/api/health-check but the page does not resolve. This is because our new load balancer is not being pointed to in Route53 in AWS. We navigate over to Route53 in AWS and update the A records for `api.thejoshdev.com` and select our new ALB. 
+
+![14 28 into CFN Service Fixed changedapiroutingroute53](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/8f6eccec-246d-49ef-b988-bf60c65d5e15)
+
+Now, we can test our backend service from a web browser by manually going to the endpoint.
+
+![14 28 into CFN Service Fixed endpointresolves](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/4588a4b7-269c-4560-80fd-55b1cac2cfbf)
+
+With that, our backend service layer should be complete. We're now able to move onto our DyanmoDB, as we're going to use SAM CFN templates to implement this through CloudFormation. 
+
+## DynamoDB Layer (SAM)
+
+A little bit on SAM. SAM, or Serverless Application Model CloudFormation templates are an extension of CloudFormation templates. They're specifically designed for building serverless applications. I asked ChatGPT to give us some key features of using SAM CFN templates:
+
+"Here are some key features and benefits of SAM CFN templates:
+
+1. Simplified Syntax: SAM templates provide a simplified syntax that reduces the amount of code needed to define serverless resources compared to traditional CloudFormation templates. This makes it easier to author and read templates for serverless applications.
+
+2. Serverless Resources: SAM introduces new resource types and properties that are optimized for serverless applications, such as AWS Lambda functions, Amazon API Gateway APIs, Amazon DynamoDB tables, and AWS Step Functions state machines. These resources can be defined in a more concise and expressive manner in SAM templates.
+
+3. Built-in Transform: SAM templates use a built-in CloudFormation transform called AWS::Serverless-2016-10-31. This transform automatically converts SAM-specific resources and properties into their equivalent CloudFormation resources during deployment. It allows you to use SAM features without sacrificing the flexibility and power of CloudFormation.
+
+4. Local Development and Testing: SAM provides a local development and testing experience through the AWS SAM CLI (Command Line Interface). With the SAM CLI, you can invoke and debug Lambda functions locally, emulate AWS service integrations, and package and deploy your application to AWS. SAM templates work seamlessly with the SAM CLI, enabling efficient local development and testing workflows.
+
+5. Predefined Event Sources: SAM templates offer predefined event sources that simplify the configuration of event-driven architectures. For example, you can define an Amazon S3 bucket as an event source for a Lambda function directly in the template, without the need for additional configuration.
+
+6. Resource Policies: SAM templates support resource policies that allow you to define fine-grained access control for your serverless resources. Resource policies enable you to set permissions at the resource level, defining who can invoke your Lambda functions or access your API Gateway APIs.
+
+Overall, SAM CFN templates provide a higher-level abstraction and convenience for building serverless applications on AWS. They make it easier to define and deploy serverless resources and integrate them with other AWS services."
+
+We start off the DynamoDb layer by creating a new folder named `ddb` within our `./aws/cfn` directory. Then we create our `template.yaml` and `config.toml` files in the folder. We then head over to `./bin/cfn` and create `ddb-deploy` as our script to deploy the DDB layer. We start off with the `ddb-deploy` script, copying the contents of the `db-deploy` script and editing it as we go: 
+
+```sh
+#! /usr/bin/env bash
+set -e #stop the execution of the script if it fails
+
+CFN_PATH="/workspace/aws-bootcamp-cruddur-2023/aws/cfn/ddb/template.yaml"
+CONFIG_PATH="/workspace/aws-bootcamp-cruddur-2023/aws/cfn/ddb/config.toml"
+
+cfn-lint $CFN_PATH 
+
+BUCKET=$(cfn-toml key deploy.bucket -t $CONFIG_PATH)
+REGION=$(cfn-toml key deploy.region -t $CONFIG_PATH)
+STACK_NAME=$(cfn-toml key deploy.stack_name -t $CONFIG_PATH)
+PARAMETERS=$(cfn-toml params v2 -t $CONFIG_PATH)
+
+aws cloudformation deploy \
+    --stack-name $STACK_NAME \
+    --s3-bucket $BUCKET \
+    --region $REGION \
+    --template-file $CFN_PATH \
+    --no-execute-changeset \
+    --tags group="cruddur-ddb" \
+    --parameter-overrides $PARAMETERS \
+    --capabilities CAPABILITY_NAMED_IAM
+```
+
+As always, we update `CFN_PATH` and `CONFIG_PATH` to reflect our DDB pathings. We now move back to our ddb `template.yaml` and begin implementing it. We access our existing `./bin/ddb/schema-load` script to cross reference when creating our DDB `template.yaml`. First we start with our DynamoDB table, which we're calling `DynamoDBTable`:
+
+```yaml
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: |
+  - DynaomDB Table
+  - DynamoDB Stream
+Parameters: 
+Resources:
+  DynamoDBTable:
+    # https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-dynamodb-table.html
+    Type: AWS::DynamoDB::Table
+    Properties: 
+      AttributeDefinitions: 
+        - AttributeName: message_group_uuid
+          AttributeType: S
+        - AttributeName: pk
+          AttributeType: S
+        - AttributeName: sk
+          AttributeType: S
+      TableClass: STANDARD
+      KeySchema: 
+        - AttributeName: pk
+          KeyType: HASH
+        - AttributeName: sk
+          KeyType: RANGE
+      ProvisionedThroughput: 
+        ReadCapacityUnits: 5
+        WriteCapacityUnits: 5
+      BillingMode: PROVISIONED
+      DeletionProtectionEnabled: true
+      GlobalSecondaryIndexes: 
+        - IndexName: message-group-sk-index
+          KeySchema: 
+            - AttributeName: message_group_uuid
+              KeyType: HASH
+            - AttributeName: sk
+              KeyType: RANGE
+          Projection: 
+            ProjectionType: ALL
+          ProvisionedThroughput: 
+            ReadCapacityUnits: 5
+            WriteCapacityUnits: 5
+      StreamSpecification:
+        StreamViewType: NEW_IMAGE
+```
+
+Immediately, what's different about this template from our others is the `Transform: AWS::Serverless-2016-10-31` line. This line indicates that the template uses the AWS Serverless transform. It enables the use of SAM-specific resources and properties. 
+
+Here's some information on the properties of `DynamoDBTable`: 
+
+`AttributeDefinitions`: This property defines the attribute definitions for the table. Each attribute definition consists of an `AttributeName` and its corresponding `AttributeType`. The `AttributeName` represents the name of the attribute, and the `AttributeType` represents the data type of the attribute (e.g., 'S' for string, 'N' for number, 'B' for binary).
+
+`TableClass`: Specifies the class of the table. You can choose between `STANDARD`, which uses provisioned throughput, and `PAY_PER_REQUEST`, which uses on-demand capacity mode.
+
+`KeySchema`: Defines the primary key schema for the table. The primary key consists of one or two attributes: the partition key (HASH) and an optional sort key (RANGE). The `KeySchema` property specifies the attribute names and their key types (either HASH or RANGE).
+
+`ProvisionedThroughput`: Specifies the provisioned read and write capacity units for the table. You can set the `ReadCapacityUnits` and `WriteCapacityUnits` properties to determine the desired capacity.
+
+`BillingMode`: Indicates the billing mode for the table. You can choose between `PROVISIONED`, which uses capacity mode, or `PAY_PER_REQUEST`, which uses on-demand mode, similar to `TableClass`.
+
+`DeletionProtectionEnabled`: Pretty self explanatory. Enables or disables deletion protection for the table. When deletion protection is enabled, the table cannot be deleted through normal CloudFormation stack updates or deletions.
+
+`GlobalSecondaryIndexes`: This property allows you to define one or more global secondary indexes (aka GSIs) for the table. Each GSI has its own `IndexName`, `KeySchema`, `Projection`, and `ProvisionedThroughput` properties, similar to the primary key schema.
+
+`LocalSecondaryIndexes`: Similar to `GlobalSecondaryIndexes`, this property enables you to define one or more local secondary indexes (aka LSIs) for the table. LSIs use the same partition key as the table but have a different sort key.
+
+`StreamSpecification`: Configures the stream specification for the table. You can set the `StreamViewType` property to specify what information is included in the stream. Valid values for `StreamViewType` are `NEW_IMAGE`, `OLD_IMAGE`, `NEW_AND_OLD_IMAGES`, or `KEYS_ONLY`.
+
+Moving on, we also define our serverless function, which we call `ProcessDynamoDBStream`. This is for our Lambda function. We use our existing one called `cruddur-messaging-stream` from AWS Lambda to cross reference: 
+
+```yaml
+  ProcessDynamoDBStream:
+    # https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/sam-resource-function.html
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: lambda_handler
+      Runtime: python3.8
+      Events:
+        Stream:
+          Type: DynamoDB
+          Properties:
+            Stream: !GetAtt DynamoDBTable.StreamArn
+            BatchSize: 100
+            StartingPosition: TRIM_HORIZON
+```
+
+We'll break this down in a bit, but at this point, we decide that we want to define an execution role for the Lambda. We start with the policy, which we're going to add inline to our role. We head over to IAM in AWS and reference our `cruddur-messageing-stream-role` that we created as the execution role for our existing `cruddur-messageing-stream` Lambda function. We allow ChatGPT to assist us, generating the policies from our existing ones attached to the `cruddur-messageing-stream-role` in AWS. Then we add it to the role: 
+
+```yaml
+  LambdaLogGroup:
+    Type: "AWS::Logs::LogGroup"
+    Properties: 
+      LogGroupName: "/aws/lambda/cruddur-messaging-stream"
+      RetentionInDays: 14
+  LambdaLogStream: 
+    Type: "AWS::Logs::LogStream"
+    Properties:
+      LogGroupName: !Ref LambdaLogGroup
+      LogStreamName: "LambdaExecution"
+  ExecutionRole:
+    # https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-iam-role.html
+    Type: AWS::IAM::Role
+    Properties: 
+      RoleName: 'CruddurDdbStreamExecRole'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: 'Allow'
+            Principal:
+              Service: 'lambda.amazonaws.com'
+            Action: 'sts:AssumeRole'
+      Policies:            
+        - PolicyName: "LambdaExecutionPolicy"
+          PolicyDocument: 
+            Version: "201-10-17"
+            Statement: 
+              - Effect: "Allow"
+                Action: "logs:CreateLogGroup"
+                Resource: !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:*"
+              - Effect: "Allow"
+                Action:
+                  - "logs:CreateLogStream"
+                  - "logs:PutLogEvents"
+                Resource: !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:${LambdaLogGroup}:*"
+              - Effect: "Allow"
+                Action: 
+                  - "ec2:CreateNetworkInterface"
+                  - "ec2:DeleteNetworkInterface"
+                  - "ec2:DescribeNetworkInterfaces"
+                Resource: "*"
+              - Effect: "Allow"
+                Action:
+                  - "lambda:InvokeFunction"
+                Resource: "*"
+              - Effect: "Allow"
+                Action:
+                  - "dynamodb:DescribeStream"
+                  - "dynamodb:GetRecords"
+                  - "dynamodb:GetShardIterator"
+                  - "dynamodb:ListStreams"
+                Resource: "*"
+```
+
+`LambdaLogGroup`: This resource is of type `AWS::Logs::LogGroup`. It represents a CloudWatch Logs log group. It defines properties such as the `LogGroupName`, which is set to `/aws/lambda/cruddur-messaging-stream`, and `RetentionInDays`, which specifies that logs should be retained for 14 days.
+
+`LambdaLogStream`: This represents a CloudWatch Logs log stream. It is associated with the `LambdaLogGroup` defined above. 
+
+`ExecutionRole`: This is our IAM role we're defining. You may notice the `Service` property is different from how we defined an `sts:AssumeRole` action in our service `template.yaml`. Instead of `ecs-tasks.amazonaws.com`, we're using `lambda.amazonaws.com`. 
+
+The policy portion defines the necessary permissions for the `ExecutionRole` to perform actions such as creating and managing CloudWatch Logs, working with network interfaces, invoking Lambda functions, and interacting with DynamoDB streams.
+
+We now have to attach the role to our Lambda (serverless function). We also continue on adding more properties for the Lambda, cross referencing the existing one: 
+
+```yaml
+  ProcessDynamoDBStream:
+    # https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/sam-resource-function.html
+    Type: AWS::Serverless::Function
+    Properties:
+      Architectures: arm64
+      CodeUri: ???
+      Handler: lambda_handler
+      Runtime: !Ref PythonRuntime
+      Role: !GetAtt ExecutionRole.Arn
+      Events:
+        Stream:
+          Type: DynamoDB
+          Properties:
+            Stream: !GetAtt DynamoDBTable.StreamArn
+            BatchSize: 100
+            StartingPosition: TRIM_HORIZON
+```
+
+While referencing our existing `cruddur-messaging-stream` Lambda, we noticed the Runtime was set to Python3.9 instead of 3.8. Since this is changing, we decided to add a parameter for that property instead and reference it. 
+
+```yaml
+Parameters: 
+  PythonRuntime: 
+    Type: String
+    Default: python3.9
+```
+
+We've added `Architectures` as a property. This will indicate that the function should be built for the `arm64` architecture. We've also added `CodeUri`, which is the location of the function's code. Since we're not sure yet, we've set a placeholder of "???" for now. 
+
+`Handler: lambda_handler`: Specifies the name of the function's handler.
+
+`Events`: Defines the events that trigger the function. In this case, it includes a single event named `Stream` of type `DynamoDB`, which triggers the function in response to DynamoDB stream records.
+
+`Type: DynamoDB`: Indicates that the event source is a DynamoDB stream.
+
+`Stream: !GetAtt DynamoDBTable.StreamArn`: Specifies the DynamoDB stream ARN that triggers the function. The !GetAtt function is retrieving the ARN of `DynamoDBTable` resource's stream using `DynamoDBTable.StreamArn`.
+
+`BatchSize: 100`: Specifies the number of records to be processed in each batch. In this case, the function will process 100 records at a time.
+
+`StartingPosition: TRIM_HORIZON`: Sets the starting position in the stream when the function is first deployed. `TRIM_HORIZON` indicates that the function should start processing from the oldest available records in the stream. This will process all available records.
+
+We keep on, adding more properties to our lambda function, and editing some as we go: 
+
+```yaml
+  ProcessDynamoDBStream:
+    # https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/sam-resource-function.html
+    Type: AWS::Serverless::Function
+    Properties:
+      Architectures: arm64
+      CodeUri: ???
+      InlineCode: ???
+      PackageType: ZIP
+      Handler: lambda_handler
+      Runtime: !Ref PythonRuntime
+      Role: !GetAtt ExecutionRole.Arn
+      MemorySize: !Ref MemorySize
+      Timeout: !Ref Timeout
+      Events:
+        Stream:
+          Type: DynamoDB
+          Properties:
+            Stream: !GetAtt DynamoDBTable.StreamArn
+            # TODO - Does our Lambda handle more than one record?
+            BatchSize: 1
+            # https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/sam-property-function-dynamodb.html#sam-function-dynamodb-startingposition
+            # TODO - Is this the right value? 
+            StartingPosition: LATEST
+```
+
+More info on the added properties: 
+
+We're still not sure if we need to use `CodeUri` or `InlineCode`. We know because we need the `PackageType` property set to `ZIP`, one of these options will be used. With `InlineCode`, the property would allow us to provide the function's code directly as an inline string.
+
+`PackageType: ZIP`: The `PackageType` property specifies the type of packaging for the function's code. In this case, it is set to `ZIP`, indicating that the code will be packaged as a ZIP file. This is the most common packaging type for Lambda functions.
+
+ `MemorySize: !Ref MemorySize`: Defines the amount of memory allocated to the function during execution.
+ 
+ `Timeout: !Ref Timeout`: The `Timeout` property specifies the maximum execution time for the function in seconds.
+ 
+ We've updated the `BatchSize` property to 1 instead of 100, as it was set before. This property sets the number of records to be processed in each batch.
+ 
+ We've also updated `StartingPosition` from `TRIM_HORIZON` to `LATEST`. This property determines the starting position in the DynamoDB stream when the function is first deployed. Setting it to `LATEST` instructs the function to start processing from the most recent record in the stream. This ensures that the function consumes only the new records that arrive after deployment. As you can see from our comments, we're questioning if this is correct at this time. 
+ 
+ We also add parameters for the `MemorySize` and `Timeout` properties.
+ 
+ ```yaml
+   MemorySize:
+    Type: Number
+    Default: 128
+  Timeout: 
+    Type: Number
+    Default: 3
+ ```
+ 
+ Our Lambda is starting to look better, so we direct our attention towards implementing SAM into our DDB layer. We need to install it into our workspace, so we open our `.gitpod.yml` file and add it: 
+ 
+ ```yaml
+ tasks:
+  - name: aws-sam
+    init: |
+      cd /workspace
+      wget https://github.com/aws/aws-sam-cli/releases/latest/download/aws-sam-cli-linux-x86_64.zip
+      unzip aws-sam-cli-linux-x86_64.zip -d sam-installation
+      sudo ./sam-installation/install
+      cd $THEIA_WORKSPACE_ROOT
+ ```
+ 
+ So we don't have to restart our workspace, we run these commands line by line in our terminal to install SAM into our current environment. With that completed, we now are deciding how we want to implement SAM. We check through the CLI to see what is available from SAM by just typing `SAM`:
+ 
+ ![image](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/b3d8b794-9b9a-4f7a-a0e6-70ba8c462e38)
+
+We know we want to use the `build` command, so we head back over to our `ddb-deploy` script and clear it, as the CFN commands we've set here aren't going to work for SAM. We also know we're going to need the `sam package` and `sam deploy` commands so we add them both: 
+
+```sh
+#! /usr/bin/env bash
+set -e #stop the execution of the script if it fails
+
+# https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/sam-cli-command-reference-sam-build.html
+sam build 
+
+# https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/sam-cli-command-reference-sam-package.html
+sam package 
+
+# https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/sam-cli-command-reference-sam-deploy.html
+sam deploy 
+```
+
+From here, we work through the script, adding options for the commands, staring with `sam build`: 
+
+```sh
+# https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/sam-cli-command-reference-sam-build.html
+sam build \
+--template \
+--parameter-overrides
+--build-dir
+--base-dir
+--region $AWS_DEFAULT_REGION   
+```
+
+These are defaults that we copied over from documentation thus far. We manually run the command for `sam build` from the terminal, and receive an error to see what it's asking for: 
+
+![image](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/5ab54c71-354d-4d05-b6c7-80f9ae267012)
+
+Our existing function sits in `./aws/lambdas` as `cruddur-messaging-stream.py`. We create a new folder in the `./aws/lambdas` directory named `cruddur-messaging-stream`, then move the existing function file to the folder. We then rename the file to `lambda-function.py` to match what it's named in AWS. We get the path to the file, and add it as a variable named `FUNC_PATH` to our `ddb-deploy` script.
+
+```sh
+FUNC_DIR="/workspace/aws-bootcamp-cruddur-2023/aws/lambdas/cruddur-messaging-stream/"
+```
+
+We then use the variable in our command for `sam build`:
+
+```sh
+# https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/sam-cli-command-reference-sam-build.html
+sam build \
+--template \
+--parameter-overrides
+--build-dir $FUNC_DIR
+--base-dir $FUNC_DIR
+--region $AWS_DEFAULT_REGION 
+```
+
+We comment out our other commands from the script, then attempt to run it: 
+
+![image](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/30866116-7a19-4e18-a194-a61640361447)
+
+With that error, we need to add another variable for our template path, so we do. Then we implement the variable as well. We also comment out our `--parameter-overrides` option for now and add another variable for our SAM configuration path, adding an option for it too. 
+
+```sh
+FUNC_DIR="/workspace/aws-bootcamp-cruddur-2023/aws/lambdas/cruddur-messaging-stream/"
+TEMPLATE_PATH="/workspace/aws-bootcamp-cruddur-2023/aws/cfn/ddb/template.yaml"
+CONFIG_PATH="/workspace/aws-bootcamp-cruddur-2023/aws/cfn/ddb/config.toml"
+
+# https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/sam-cli-command-reference-sam-build.html
+sam build \
+--config $CONFIG_PATH \
+--template $TEMPLATE_PATH \
+--build-dir $FUNC_DIR \
+--base-dir $FUNC_DIR \
+--region $AWS_DEFAULT_REGION 
+#--parameter-overrides
+```
+
+We run the script again, not expecting it to work, just seeing what else we need to add. Here's the error output:
+
+![image](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/0de9c7dd-8526-444e-8ecb-3636d3c1654a)
+
+We correct the error by editing our option for the configuration file.
+
+```sh
+FUNC_DIR="/workspace/aws-bootcamp-cruddur-2023/aws/lambdas/cruddur-messaging-stream"
+TEMPLATE_PATH="/workspace/aws-bootcamp-cruddur-2023/aws/cfn/ddb/template.yaml"
+CONFIG_PATH="/workspace/aws-bootcamp-cruddur-2023/aws/cfn/ddb/config.toml"
+
+# https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/sam-cli-command-reference-sam-build.html
+sam build \
+--config-file $CONFIG_PATH \
+--template $TEMPLATE_PATH \
+--build-dir $FUNC_DIR \
+--base-dir $FUNC_DIR \
+--region $AWS_DEFAULT_REGION 
+#--parameter-overrides
+```
+
+We again run the script:
+
+![image](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/8fe800c7-69d5-470a-9ca7-40bc5ee75cc5)
+
+This is because our existing `config.toml` in the `./aws/cfn/ddb` directory is empty. We consult AWS documentation for reference. 
+
+![image](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/00b9e540-0680-4a1a-a935-fb4aecee6b24)
+
+In a SAM configuration file, you can set different parameters for different SAM commands. With a good point of reference, we begin implementing our `config.toml` using the SAM configuration structure, setting parameters for each of our SAM commands:
+
+```toml
+version=0.1
+[default.build.parameters]
+region = "us-east-1"
+
+[default.package.parameters]
+region = "us-east-1"
+
+[default.deploy.parameters]
+region = "us-east-1"
+```
+
+Since we're setting the `region` parameter here, we remove it from our `ddb-deploy` script. 
+
+```sh
+# https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/sam-cli-command-reference-sam-build.html
+sam build \
+--config-file $CONFIG_PATH \
+--template-file $TEMPLATE_PATH \
+--base-dir $FUNC_DIR 
+# --parameter-overrides 
+```
+
+We run `ddb-deploy` again: 
+
+![image](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/0bb0be53-c578-4d24-b9d5-fc54aa966e9b)
+
+We're told from the terminal that the build succeeded, so we go in search of the artifacts and template files it built. Our `build.toml` file that was auto-generated was placed into our `./aws/lambdas` directory. 
+
+![image](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/da67749b-eb35-46ce-8a21-82ef04411271)
+
+This wasn't the intended result, so we check Source Control from our workspace and discard the changes, deleting the file. 
+
+![image](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/0a6f19a7-4ef5-43b2-9274-29dc98bdf26a)
+
+We adjust the `FUNC_DIR` pathing in our `ddb-deploy` script, adding a `/` to the end of the path.
+
+```sh
+FUNC_DIR="/workspace/aws-bootcamp-cruddur-2023/aws/lambdas/cruddur-messaging-stream/"
+```
+
+Then run the `ddb-deploy` script again. The build succeeds again. This makes no difference. The `build.toml` file is placed into the same location as before. This leads us to adjusting our `.gitignore` file, so this file does not persist within our environment. 
+
+![image](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/1a1015d2-2dc7-45f5-938f-03b0175800a3)
+
+We move on, now working on the `sam package` command in the `ddb-deploy` script: 
+
+```sh
+FUNC_DIR="/workspace/aws-bootcamp-cruddur-2023/aws/lambdas/cruddur-messaging-stream/"
+TEMPLATE_PATH="/workspace/aws-bootcamp-cruddur-2023/aws/cfn/ddb/template.yaml"
+CONFIG_PATH="/workspace/aws-bootcamp-cruddur-2023/aws/cfn/ddb/config.toml"
+ARTIFACT_BUCKET="jh-cfn-artifacts"
+
+# https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/sam-cli-command-reference-sam-build.html
+sam build \
+--config-file $CONFIG_PATH \
+--template-file $TEMPLATE_PATH \
+--build-dir $FUNC_DIR \ 
+--base-dir $FUNC_DIR 
+# --parameter-overrides 
+
+# https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/sam-cli-command-reference-sam-package.html
+sam package \
+  --s3-bucket $ARTIFACT_BUCKET \
+  --config-file $CONFIG_PATH \
+  --template-file $TEMPLATE_PATH \
+```
+
+We run our `ddb-deploy` script again, and the build completes. Here's the output from the `sam package` command portion: 
+
+![image](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/70a434ea-6acb-432c-aeb0-e4505fcd34a4)
+
+The output is spit out in the terminal (which is a CFN template) because we haven't told it to dump this information somewhere yet. We move over to S3 in AWS, checking our `jh-cfn-artifacts` bucket to see if the template was uploaded. It was not. We need to specify where the template file is written so it doesn't default to the standard output. 
+
+We comment out the option from our `sam build` command in the script for `--base-dir` and run the script again: 
+
+![image](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/908a240b-1989-463f-826c-503effcece7a)
+
+This updates our directory where the artifacts are built to, so we remove the `--base-dir` option altogether. We can see the the `build` directory and the `template.yaml` file generated are now going to the correct location: 
+
+![image](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/e066eeab-03fe-4d06-8498-e32cafe45955)
+
+We can now continue working on the `sam package` command in our `ddb-deploy` script. We add variables for the `sam package` command, specifying a new value for `TEMPLATE_PATH` to match the location generated by the `sam build` command, and `OUTPUT_TEMPLATE_PATH` to specify the path for the outputted `packaged.yaml` file. Next, we add an option for the `--output-template-file` and use the new variable. We also add an option to give an S3 prefix:
+
+```sh
+TEMPLATE_PATH="/workspace/aws-bootcamp-cruddur-2023/.aws-sam/build/template.yaml"
+OUTPUT_TEMPLATE_PATH="/workspace/aws-bootcamp-cruddur-2023/.aws-sam/build/packaged.yaml"
+
+# https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/sam-cli-command-reference-sam-package.html
+sam package \
+  --s3-bucket $ARTIFACT_BUCKET \
+  --config-file $CONFIG_PATH \
+  --output-template-file $OUTPUT_TEMPLATE_PATH \
+  --template-file $TEMPLATE_PATH \
+  --s3-prefix "ddb"
+```
+
+We test the `ddb-deploy` script again: 
+
+![1 20 03 into SAM CFN for Dynamodb DynamoDB Streams Lambda buildsucceededSAMtemplate](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/4daeffcb-f7f7-4cb1-9595-7db5d0c22230)
+
+We now have a `packaged.yaml` file in the temporary `.aws-sam/build` directory: 
+
+![image](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/cd38cecc-2810-4b16-bf5f-86de9ef47a33)
+
+We're now able to begin working on the `sam deploy` portion of the script. We want to make use of the pathing for the new `packaged.yaml` file, as this is what will be deployed. We add another variable for this path named `PACKAGED_TEMPLATE_PATH`. We then implement the rest of the options for the `sam deploy` command: 
+
+```sh
+PACKAGED_TEMPLATE_PATH="/workspace/aws-bootcamp-cruddur-2023/.aws-sam/build/packaged.yaml"
+
+# https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/sam-cli-command-reference-sam-deploy.html
+sam deploy \
+  --template-file $PACKAGED_TEMPLATE_PATH \
+  --config-file $CONFIG_PATH \  
+  --stack-name "CrdDdb"\
+  --tags group="cruddur-ddb" \
+  --capabilities "CAPABILITY_IAM"
+```
+
+We test the `ddb-deploy` script again. The `build` and `package` steps complete, and deployment is initiated. From the terminal, we can see a changeset is waiting to be created.
+
+![image](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/99b445aa-cf2e-4aad-a5b0-29e51311f45d)
+
+The changeset fails to create. We decide to try running the `sam validate`command to validate our template. 
+
+![1 24 30 into SAM CFN for Dynamodb DynamoDB Streams Lambda validateSAM](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/08cf5852-286b-47c5-bd00-3a0463137bfd)
+
+This command is so useful, we decide to add it to our `ddb-deploy` script to run before any of our other commands in the script.
+
+```sh
+sam validate -t $TEMPLATE_PATH
+```
+
+With the error, we head back over to our `./aws/cfn/ddb/template.yaml` and find that we're still missing values for some properties in our function. Other properties need adjusted as well. 
+
+![image](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/b35d31ec-8f54-4a4b-8f85-d0afa26786a4)
+
+We make adjustments, specifically removing the `InlineCode` property. We update the case-sensitive value for `ZIP` to `Zip`, and also provide a path for `CodeUri`.
+
+```yaml
+    # https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/sam-resource-function.html
+    Type: AWS::Serverless::Function
+    Properties:
+      Architectures: arm64
+      CodeUri: .
+      PackageType: Zip
+      Handler: lambda_handler
+      Runtime: !Ref PythonRuntime
+      Role: !GetAtt ExecutionRole.Arn
+```
+
+We test `ddb-deploy` again: 
+
+![image](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/dfc6db6f-29d2-4355-83d0-51b2dcfe095c)
+
+We adjust our `Architectures` property to use a list instead:
+
+```yaml
+    # https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/sam-resource-function.html
+    Type: AWS::Serverless::Function
+    Properties:
+      Architectures: 
+        - arm64
+      CodeUri: .
+      PackageType: Zip
+      Handler: lambda_handler
+      Runtime: !Ref PythonRuntime
+      Role: !GetAtt ExecutionRole.Arn
+```
+
+Then we run `ddb-deploy` again: 
+
+![1 29 55 into SAM CFN for Dynamodb DynamoDB Streams Lambda BuildFailedSAM](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/8dac38bb-f97a-422f-8ad3-05e81057ffc2)
+
+Andrew let's us know that this error indicates we may want to run this in a container. That way we can install dependencies required for our Lambda function. For this, we add the `--use-container` option to our `ddb-deploy` script for the `sam build` command.
+
+```sh
+sam validate -t $TEMPLATE_PATH
+
+# https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/sam-cli-command-reference-sam-build.html
+# --use-container
+# use container is for building the lambda in a container
+# its still using the runtimes and its not a custom runtime
+sam build \
+--use-container \
+--config-file $CONFIG_PATH \
+--template-file $TEMPLATE_PATH \
+--base-dir $FUNC_DIR 
+```
+
+We again run our `ddb-deploy` script. The script hangs while mounting the container. 
+
+![1 39 52 into SAM CFN for Dynamodb DynamoDB Streams Lambda usecontainerhangsonmounting](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/60167f6b-3bdd-4ced-a549-7b4761535ca5)
+
+We update `template.yaml` to remove `Architectures` property so it defaults to `x86` instead of `arm64` like we were specifying, as Andrew was able to find other users with the same issue online and this resolved the problem. 
+
+![image](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/6489d3f7-ac50-4538-bc2b-cdeab68da25b)
+
+We also go to update the `CodeUri` property as well, as others were having issues with the pathing specified there. When we navigate to the `./aws/lambdas/cruddur-messaging-stream` directory (pathing for our Lambda function), we only have a `template.yaml` file in there. 
+
+![image](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/e4315d92-7061-4af9-a864-22f62efae040)
+
+We have to go back into our previous commits to copy the file back into our workspace, placing the `lambda-function.py` file back into the `./aws/lambdas/cruddur-messaging-stream` directory. Then we delete the `template.yaml` file in the same directory.
+
+![image](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/fd86e0c8-4d55-435c-a62b-d3504704781a)
+
+We finish updating the pathing for `CodeUri`: 
+
+```yaml
+    # https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/sam-resource-function.html
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: aws/lambdas/cruddur-messaging-stream
+      PackageType: Zip
+      Handler: lambda_handler
+      Runtime: !Ref PythonRuntime
+      Role: !GetAtt ExecutionRole.Arn
+```
+
+We again run the `ddb-deploy` script, and we pass the build step, then the package step. Before checking if the deploy finished or not, we navigate to the `.aws-sam/build/template.yaml` to see what was generated out:
+
+![image](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/21ca06c2-fcee-4bc4-9b23-dba8d2bdb219)
+
+This is not what we specified for `CodeUri` but that's what it replaced it with. When we check the `packaged.yaml` file generated, the `CodeUri` value shows a path for our S3 bucket, `jh-cfn-artifacts`, using the `ddb` prefix we set in the script. Here's a screenshot from Andrew's `packaged.yaml` for reference: 
+
+![image](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/28f65e8a-0b43-4883-9074-6c1f9566bddc)
+
+That being said, it looks like our deployment did not succeeed, as there's an error when creating the changeset:
+
+![1 47 12 into SAM CFN for Dynamodb DynamoDB Streams Lambda failedtocreatechangeset](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/beaa6f12-49e3-46d2-80c2-6f8a1f49eb13)
+
+We fix the error by updating the `--capabilities` option of our `sam deploy` command to the correct value in `ddb-deploy`:
+
+```sh
+# https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/sam-cli-command-reference-sam-deploy.html
+sam deploy \
+  --template-file $PACKAGED_TEMPLATE_PATH \  
+  --config-file $CONFIG_PATH \
+  --stack-name "CrdDdb"\
+  --tags group="cruddur-ddb" \
+  --capabilities "CAPABILITY_NAMED_IAM"
+```
+
+Instead of running the `ddb-deploy` script again, we decide to break each command up into its own script. We create a new folder in the `./bin` directory named `sam`. Then within `sam`, we create another new folder named `ddb`. We then create 3 new scripts within the `./bin/sam/ddb` directory for each command: `build`, `deploy`, and `package`. Then, we go ahead and break up the `ddb-deploy` script, putting each command into it's corresponding script: 
+
+`./bin/sam/ddb/build`
+
+```sh
+#! /usr/bin/env bash
+set -e #stop the execution of the script if it fails
+
+FUNC_DIR="/workspace/aws-bootcamp-cruddur-2023/aws/lambdas/cruddur-messaging-stream/"
+TEMPLATE_PATH="/workspace/aws-bootcamp-cruddur-2023/aws/cfn/ddb/template.yaml"
+CONFIG_PATH="/workspace/aws-bootcamp-cruddur-2023/aws/cfn/ddb/config.toml"
+
+sam validate -t $TEMPLATE_PATH
+
+echo "== build"
+# https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/sam-cli-command-reference-sam-build.html
+# --use-container
+# use container is for building the lambda in a container
+# its still using the runtimes and its not a custom runtime
+sam build \
+--use-container \
+--config-file $CONFIG_PATH \
+--template-file $TEMPLATE_PATH \
+--base-dir $FUNC_DIR 
+# --parameter-overrides 
+```
+
+`./bin/sam/ddb/deploy`
+
+```sh
+#! /usr/bin/env bash
+set -e #stop the execution of the script if it fails
+
+PACKAGED_TEMPLATE_PATH="/workspace/aws-bootcamp-cruddur-2023/.aws-sam/build/packaged.yaml"
+CONFIG_PATH="/workspace/aws-bootcamp-cruddur-2023/aws/cfn/ddb/config.toml"
+
+echo "== deploy"
+# https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/sam-cli-command-reference-sam-deploy.html
+sam deploy \
+  --template-file $PACKAGED_TEMPLATE_PATH \
+  --config-file $CONFIG_PATH \
+  --stack-name "CrdDdb"\
+  --tags group="cruddur-ddb" \
+  --capabilities "CAPABILITY_NAMED_IAM"
+```
+
+`./bin/sam/ddb/package`
+
+```sh
+#! /usr/bin/env bash
+set -e #stop the execution of the script if it fails
+
+TEMPLATE_PATH="/workspace/aws-bootcamp-cruddur-2023/.aws-sam/build/template.yaml"
+CONFIG_PATH="/workspace/aws-bootcamp-cruddur-2023/aws/cfn/ddb/config.toml"
+OUTPUT_TEMPLATE_PATH="/workspace/aws-bootcamp-cruddur-2023/.aws-sam/build/packaged.yaml"
+ARTIFACT_BUCKET="jh-cfn-artifacts"
+
+echo "== package"
+# https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/sam-cli-command-reference-sam-package.html
+sam package \
+  --s3-bucket $ARTIFACT_BUCKET \
+  --config-file $CONFIG_PATH \
+  --output-template-file $OUTPUT_TEMPLATE_PATH \
+  --template-file $TEMPLATE_PATH \
+  --s3-prefix "ddb"
+```
+
+We make each script executable, then run each one individually, making sure they work. All is well until the `deploy` script. Our changeset is created successfully, but it executes the changeset on its own and fails. 
+
+![1 48 59 into SAM CFN for Dynamodb DynamoDB Streams Lambda rollbackfailed](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/e40430de-34ad-4857-bd7a-2f4043589c61)
+
+We fix this by adding the option `  --no-execute-changeset` to our `deploy` script: 
+
+```sh
+#! /usr/bin/env bash
+set -e #stop the execution of the script if it fails
+
+PACKAGED_TEMPLATE_PATH="/workspace/aws-bootcamp-cruddur-2023/.aws-sam/build/packaged.yaml"
+CONFIG_PATH="/workspace/aws-bootcamp-cruddur-2023/aws/cfn/ddb/config.toml"
+
+echo "== deploy"
+# https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/sam-cli-command-reference-sam-deploy.html
+sam deploy \
+  --template-file $PACKAGED_TEMPLATE_PATH \
+  --config-file $CONFIG_PATH \
+  --stack-name "CrdDdb"\
+  --tags group="cruddur-ddb" \
+  --no-execute-changeset \  
+  --capabilities "CAPABILITY_NAMED_IAM"
+```
+
+We then remove the `ddb-deploy` script, as we no longer need it. The error also indicated that the `LambdaLogGroup` using property `LogGroupName: "/aws/lambda/cruddur-messaging-stream"` already exists, so we update the `LogGroupName` to `"/aws/lambda/cruddur-messaging-stream00"` in our DDB template. Then we head back over to CloudFormation in AWS and try deleting the DDB stack, but it fails to delete. The DDB table we were creating had Deletion protection enabled, so it won't delete. From our DDB template, we add a parameter for  `DeletionProtectionEnabled` setting the value to false:
+
+```yaml
+  DeletionProtectionEnabled:
+    Type: String
+    Default: false
+```
+
+Then we reference the parameter for the property in the DDB table: 
+
+```yaml
+      DeletionProtectionEnabled: !Ref DeletionProtectionEnabled
+```
+
+From there, we head over to DynamoDB in AWS, and turn off deletion protection for the table:
+
+![image](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/dc58d28b-a52d-4134-867c-87f8e172d548)
+
+Then we navigate back to CFN and delete the DDB stack:
+
+![image](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/6eb72822-7d16-431d-9cd3-a8243b144549)
+
+Back over in our workspace, we again run all 3 scripts: `build`, `package`, `deploy`: 
+
+![1 54 52 into SAM CFN for Dynamodb DynamoDB Streams Lambda changesetcreated](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/62faf400-c481-46e9-8012-b5884cc23da1)
+
+Our changeset is created successfully, and this time it didn't execute automatically. We head back over to CloudFormation and execute the changeset, which returns an error: 
+
+![end of SAM CFN for Dynamodb DynamoDB Streams Lambda uploadedfilemustbenonempty](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/d6d1145b-70d8-42b0-9ddd-c672402a41b6)
+
+The error indicates the `.zip` file uploaded to CloudFormation is empty. We check this by heading over to S3, and access the `jh-cfn-artifacts` bucket, navigating to the `ddb` folder inside. There's a file (or folder) here, so we download it, then add a `.zip` file extension to it. The folder is most definitely empty:
+
+![image](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/8ab49fd0-2caa-43ea-9043-7140fdb08ef1)
+
+We go ahead and empty the `jh-cfn-artifacts` bucket as it was getting quite full. For a better way of keeping this bucket organized, we decide to add the `--s3-prefix` option/flag to each of our scripts.
+
+```sh
+    --s3-prefix cluster \
+```
+
+```sh
+    --s3-prefix db \
+```
+
+```sh
+    --s3-prefix networking \
+```
+
+```sh
+    --s3-prefix backend-service \
+```
+
+We also initially thought that the Lambda function in our DDB `template.yaml` would run relative to where the `template.yaml` file was located. To test this, we move the `cruddur-messaging-stream` folder containing our `lamba_function.py` file out of the `./aws/lambdas` directory, and into the `./aws/cfn/ddb` directory. Then, we update the `CodeUri` value in the DDB template file to reflect the change: 
+
+```yaml
+      CodeUri: cruddur-messaging-stream
+```
+
+We run our `build` script to test, just to see where our SAM generated template is building out. The value for `CodeUri` in our generated `template.yaml` appears to be what's being built, and it's being built in the `.aws-sam/build` directory.
+
+We delete the folder that's being built out to test for sure. Then we run the `build` script again. The `ProcessDynamoDBStream` folder IS being created. We expand the folder: 
+
+![image](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/42284c78-c69c-458f-abbe-f0523aa52800)
+
+Its empty. This is our problem. Further into troubleshooting, we move the `cruddur-messaging-stream` folder containing our function that we moved earlier into the top level root directory of our workspace.
+
+![image](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/25474a42-7afa-4fce-8fe2-f3c1995540ac)
+
+Then we update the `CodeUri` property in `./aws/cfn/ddb/template.yaml` to `cruddur-messaging-stream`: 
+
+![image](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/5bf7587b-6bc6-4b9f-a4b4-28ffedcaa91e)
+
+We again run the `build` script and get the same results as before. Andrew confirms that this means the `CodeUri` property isn't relative to where the `template.yaml` file is located. We decide to create a new root level folder named `ddb`, then we move all of our DDB scripts, `template.yaml`, `config.toml`, our `cruddur-messaging-stream` folder containing `lamba_function.py`, and all other dependencies into the root level `ddb` folder. Next, we delete the `sam/ddb` folders from the root directory, as they're now empty.  
+
+![image](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/443fbb5b-7232-499a-b7b3-2a2681af5705)
+
+We update the pathing to our variables in our `build`, `package`, and `deploy` scripts: 
+
+```sh
+FUNC_DIR="/workspace/aws-bootcamp-cruddur-2023/ddb/cruddur-messaging-stream/"
+TEMPLATE_PATH="/workspace/aws-bootcamp-cruddur-2023/ddb/template.yaml"
+CONFIG_PATH="/workspace/aws-bootcamp-cruddur-2023/ddb/config.toml"
+```
+
+When we try our `build` script again, we find that it's creating an empty `cruddur-messaging-stream` folder within our existing one:
+
+![image](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/45387f70-4897-4024-afcb-16afd2361391)
+
+The `.aws-sam/build/ProcessDynamoDBStream` folder is also generated and empty still. We remove the created folders, and since we're getting prompts for it while running the `build` script, we add an empty `requirements.txt` file inside of the `cruddur-messaging-stream` folder. Then we run our `build` script again. It again creates the `cruddur-messaging-stream` folder inside the existing one. The empty `requirements.txt` we added made no difference either: 
+
+![image](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/c327ffb3-715c-4c6f-aa66-e9fa76a5f898)
+
+We delete the duplicate `cruddur-messaging-stream` folder, rename the existing one to `function`, then updated the `FUNC_DIR` variable in our `build` script:
+
+```sh
+FUNC_DIR="/workspace/aws-bootcamp-cruddur-2023/ddb/function"
+```
+
+We then go back to the DDB `template.yaml` and update the `CodeUri` property again: 
+
+```yaml
+      CodeUri: .
+```
+
+From there, since it's not doing anything, we remove the `requirements.txt` file we created earlier from the `./ddb/function` directory that it resided in. We try our `build` script again and it completes. We know it worked because we have `lambda_function.py` in the `.aws-sam/build` directory: 
+
+![image](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/86527764-31b7-4554-93ea-c51cf12fecd1)
+
+We continue on, running our `package` script. 
+
+![image](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/5b76b920-1947-47cd-9641-cfac3bb4f0f2)
+
+Before we run the `deploy` script, we check CloudFormation for the DDB stack:
+
+![image](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/686b9490-5dea-4da5-920d-0b611e13a965)
+
+Since it never has completed successfully, we won't be able to run the `deploy` script yet. We delete the stack from CFN, THEN run the `deploy` script. Our changeset is created successfully.
+
+![image](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/f3e6bbf8-91a6-4b59-8e88-3566db2add51)
+
+We execute the changeset from CloudFormation and wait for it to complete. The DDB stack shows a status of `CREATE_COMPLETE`. 
+
+![end of SAM CFN Fix SAM Lambda Code Artifact createcomplete](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/77ea571d-04bd-4642-855a-e57aa8f98216)
+
+This puts our DDB layer in a good state for now. We are now ready to move onto the CICD layer.
+
+## CICD Layer
+
+To start off the CICD layer, we start off with the script. We create a new one in the `./bin/cfn` directory named `cicd-deploy`, then copy the `networking-deploy` script to use as a basis. As always, we adjust the pathing for our `CFN_PATH` and `CONFIG_PATH` variables then update the `--s3-prefix` and `--tags group` flags to `--s3-prefix cicd \` and `--tags group="cruddur-cicd" \` respectively.
+
+```sh
+#! /usr/bin/env bash
+set -e #stop the execution of the script if it fails
+
+CFN_PATH="/workspace/aws-bootcamp-cruddur-2023/aws/cfn/cicd/template.yaml"
+CONFIG_PATH="/workspace/aws-bootcamp-cruddur-2023/aws/cfn/cicd/config.toml"
+
+cfn-lint $CFN_PATH
+
+BUCKET=$(cfn-toml key deploy.bucket -t $CONFIG_PATH)
+REGION=$(cfn-toml key deploy.region -t $CONFIG_PATH)
+STACK_NAME=$(cfn-toml key deploy.stack_name -t $CONFIG_PATH)
+
+aws cloudformation deploy \
+    --stack-name $STACK_NAME \
+    --s3-bucket $BUCKET \
+    --s3-prefix cicd \
+    --region $REGION \
+    --template-file $CFN_PATH \
+    --no-execute-changeset \
+    --tags group="cruddur-cicd" \
+    --capabilities CAPABILITY_NAMED_IAM
+```
+
+Next, we move over to the `./aws/cfn` directory and create a `cicd` folder, placing a new `template.yaml` and `config.toml` file in the folder. We populate `config.toml`, defining no parameters: 
+
+```toml
+[deploy]
+bucket = 'jh-cfn-artifacts'
+region = 'us-east-1'
+stack_name = 'CrdCicd'
+```
+
+We next start implementing the `template.yaml`. We already know what parameters we're going to need, so we begin defining these:
+
+```yaml
+AWSTemplateFormatVersion: 2010-09-09
+Description: |
+  - CodeStar Connection V2 Github
+  - CodePipeline
+  - CodeBuild
+Parameters:
+  GitHubBranch: 
+    Type: String
+    Default: prod
+  GithubRepo: 
+    Type: String
+    Default: 'jhargett1/aws-bootcamp-cruddur-2023'
+  ClusterStack:
+    Type: String
+  ServiceStack:
+    Type: String
+Resources: 
+```
+
+Its decided that we'd like to use a nested stack to implement the CICD layer. Andrew explains that when you have a `codebuild.yaml` file that you'd like to use over and over again, that's what you'd use, is a nested stack. I asked ChatGPT for further clarification: 
+
+"By using a nested stack, you can modularize your CloudFormation template and separate different sets of resources into their own templates. This promotes reusability and maintainability, allowing you to manage and update individual components of your infrastructure independently."
+
+We add the stack as a resource to our `template.yaml`: 
+
+```yaml
+Resources: 
+  CodeBuildBakeImageStack:
+    # https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-properties-stack.html
+    Type: AWS::CloudFormation::Stack
+    Properties: 
+      TemplateURL: nested/codebuild.yaml
+```
+
+With the `TemplateURL` defined, we go ahead and create the path by adding a new folder named `nested` to the `./aws/cfn/cicd` directory. Then we create the `codebuild.yaml` file inside. For our `codebuild.yaml` file, Andrew already as an existing one that works, so we copy this over, editing properties to match our project: 
+
+```yaml
+AWSTemplateFormatVersion: 2010-09-09
+Description: |
+  Codebuild used for baking container images
+  - Codebuild  Project
+  - Codebuild Project Role
+Parameters: 
+  LogGroupPath:
+    Type: String
+    Description: "The log group path for CodeBuild"
+    Default: "/cruddur/codebuild/bake-service"
+  LogStreamName:
+    Type: String
+    Description: "The log group path for CodeBuild"
+    Default: "backend-flask"    
+  CodeBuildImage: 
+    Type: String
+    Default: aws/codebuild/amazonlinux2-x86_64-standard:4.0
+  CodeBuildComputeType:
+    Type: String
+    Default: BUILD_GENERAL1_SMALL
+  CodeBuildTimeoutMins:
+    Type: Number
+    Default: 5
+  BuildSpec:
+    Type: String
+    Default: 'buildspec.yaml'
+Resources: 
+  CodeBuild:
+    # https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-codebuild-project.html
+    Type: AWS::CodeBuild::Project
+    Properties:
+      QueuedTimeoutInMinutes: !Ref CodeBuildTimeoutMins
+      ServiceRole: !GetAtt CodeBuildRole.Arn
+      # PrivilegedMode is needed to build Docker images
+      # even though we have No Artifacts, CodePipeline Demands both to be set as CODEPIPLINE
+      Artifacts:
+        Type: CODEPIPELINE
+      Environment:
+        ComputeType: !Ref CodeBuildComputeType
+        Image: !Ref CodeBuildImage
+        Type: LINUX_CONTAINER
+        PrivilegedMode: true
+      LogsConfig:
+        CloudWatchLogs:
+          GroupName: !Ref LogGroupPath
+          Status: ENABLED
+          StreamName: !Ref LogStreamName
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: !Ref BuildSpec
+  CodeBuildRole:
+    # https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-iam-role.html
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+        - Action: ['sts:AssumeRole']
+          Effect: Allow
+          Principal:
+            Service: [codebuild.amazonaws.com]
+        Version: '2012-10-17'
+      Path: /
+      Policies:
+        - PolicyName: !Sub ${AWS::StackName}ECRPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Action:
+                - ecr:BatchCheckLayerAvailability
+                - ecr:CompleteLayerUpload
+                - ecr:GetAuthorizationToken
+                - ecr:InitiateLayerUpload
+                - ecr:BatchGetImage
+                - ecr:GetDownloadUrlForLayer
+                - ecr:PutImage
+                - ecr:UploadLayerPart
+                Effect: Allow
+                Resource: "*"
+        - PolicyName: !Sub ${AWS::StackName}VPCPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Action:
+                - ec2:CreateNetworkInterface
+                - ec2:DescribeDhcpOptions
+                - ec2:DescribeNetworkInterfaces
+                - ec2:DeleteNetworkInterface
+                - ec2:DescribeSubnets
+                - ec2:DescribeSecurityGroups
+                - ec2:DescribeVpcs
+                Effect: Allow
+                Resource: "*"
+              - Action:
+                - ec2:CreateNetworkInterfacePermission
+                Effect: Allow
+                Resource: "*"
+        - PolicyName: !Sub ${AWS::StackName}Logs
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Action:
+                - logs:CreateLogGroup
+                - logs:CreateLogStream
+                - logs:PutLogEvents
+                Effect: Allow
+                Resource:
+                  - !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:${LogGroupPath}*
+                  - !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:${LogGroupPath}:*
+Outputs:
+  CodeBuildProjectName:
+    Description: "CodeBuildProjectName"
+    Value: !Sub ${AWS::StackName}Project
+```
+
+A lot of the properties defined here are quite self explanatory, but I'll dig a bit deeper here: 
+
+`LogGroupPath`: Represents the log group path for CodeBuild. It allows you to specify the desired log group path where the CodeBuild logs will be stored.
+
+`LogStreamName`: Represents the log stream name for CodeBuild. It allows you to specify the name of the log stream where the CodeBuild logs will be written. 
+
+`CodeBuildImage`: Specifies the Docker image to be used for CodeBuild. 
+
+`CodeBuildComputeType`: Specifies the compute type for CodeBuild. It determines the resources allocated to the CodeBuild project during the build process. 
+
+`CodeBuildTimeoutMins`: This specifies the timeout duration for CodeBuild in minutes. If the build process exceeds this timeout, it will be terminated.
+
+The `CodeBuildRole` we specified grants the necessary permissions to interact with ECR, VPC resources, and manage logs. Finally, the output provides access to the CodeBuild project name for further use in other parts of our infrastructure if needed. 
+
+This should completely flesh out our `codebuild.yaml`. We move back over to our CICD `template.yaml` file and continue adding resources, starting with a CodeStar Connection. This resource is a service that will enable us to connect and manage resources in GitHub. 
+
+```yaml
+  CodeStarConnection:
+    # https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-codestarconnections-connection.html
+    Type: AWS::CodeStarConnections::Connection
+    Properties: 
+      ProviderType: GitHub
+```
+
+No properties to define here. `ProviderType` indicates we're building a CodeStar connection to connect us to our GitHub repository. 
+
+We're now ready to begin working on the pipeline resource. We implement this in our CICD template, including all 3 stages; source, build, deploy:
+
+```yaml
+  Pipeline:
+    # https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-codepipeline-pipeline.html
+    Type: AWS::CodePipeline::Pipeline
+    Properties: 
+      RoleArn: !GetAtt CodePipelineRole.Arn
+      Stages:
+        - Name: Source
+          Actions:
+            - Name: ApplicationSource
+              RunOrder: 1
+              ActionTypeId:
+                Category: Source
+                Provider: CodeStarSourceConnection
+                Owner: AWS
+                Version: '1'
+              OutputArtifacts:
+                - Name: Source
+              Configuration: 
+                ConnectionArn: !Ref CodeStarConnection
+                FullRepositoryId: !Ref GithubRepo
+                BranchName: !Ref GitHubBranch
+                OutputArtifactFormat: "CODE_ZIP"
+        - Name: Build
+          Actions: 
+            - Name: BuildContainerImage
+              RunOrder: 1
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Provider: CodeBuild
+                Version: '1'
+              InputArtifacts:
+                - Name: Source
+              OutputArtifacts:
+                - Name: ImageDefinition
+              Configuration:
+                ProjectName: !GetAtt CodeBuildBakeImageStack.Outputs.CodeBuildProjectName
+                BatchEnabled: false
+        # https://docs.aws.amazon.com/codepipeline/latest/userguide/action-reference-ECS.html                
+        - Name: Deploy
+          Actions:
+            - Name: Deploy
+              RunOrder: 1
+              ActionTypeId: 
+                Category: Deploy
+                Provider: ECS
+                Owner: AWS
+                Version: '1'
+              InputArtifacts: 
+                - Name: ImageDefinition
+              Configuration: 
+                # In Minutes
+                DeploymentTimeout: "10"
+                ClusterName: 
+                  Fn::ImportValue:
+                    !Sub ${ClusterStack}ClusterName
+                ServiceName: 
+                  Fn::ImportValue:
+                    !Sub ${ServiceStack}ServiceName                
+```
+
+Let me provide some information on the various properties of the stages: 
+
+`RunOrder`: This property determines the order in which actions are executed within a stage.
+
+`ActionTypeId`: This property identifies the type of action to be performed.
+
+`Category`: This property specifies the category of the action. In this case, the category can be "Source", "Build", or "Deploy" depending on the stage.
+
+`Provider`: This property specifies the provider of the action. For example, "CodeStarSourceConnection" for the source stage, "CodeBuild" for the build stage, and "ECS" for the deploy stage.
+
+`Owner`: This property specifies the owner of the action. In this case, it is set to "AWS" indicating that the action is provided by AWS.
+
+`Version`: This property specifies the version of the action.
+
+`InputArtifacts`: This property specifies the input artifacts for the action. These artifacts are typically generated by previous actions in the pipeline.
+
+`OutputArtifacts`: This property specifies the output artifacts produced by the action. These artifacts can be used as input by subsequent actions.
+
+`Configuration`: This property contains the configuration settings for the action. The specific configuration properties depend on the action type.
+
+For the `ServiceName` property, we are importing the value of the `ServiceName` property from our service layer. We need to go back to our service `template.yaml` and add this as an Output to export: 
+
+```yaml
+Outputs:
+  ServiceName:
+    Value: !GetAtt FargateService.Name
+    Export:
+      Name: !Sub "${AWS::StackName}ServiceName"
+```
+
+With this output added, we need to make it available to our CICD layer. We redeploy the service layer, running the `service-deploy` script. Then, we execute the changeset from CFN. The output is added: 
+
+![image](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/dd7a03c7-4fb4-4f05-a7a2-33cfc6aa3890)
+
+You may have also noticed we're already getting the ARN attribute from `CodePipelineRole` to define the value for `RoleArn` in the pipeline. We can now define this role in the CICD `template.yaml`. We also use the inline policy to define the permissions of the role, much as we've done a few times thus far: 
+
+```yaml
+  CodePipelineRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+        - Action: ['sts:AssumeRole']
+          Effect: Allow
+          Principal:
+            Service: [codepipeline.amazonaws.com]
+        Version: '2012-10-17'
+      Path: /
+      Policies:
+        - PolicyName: !Sub ${AWS::StackName}EcsDeployPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Action:
+                - ecs:DescribeServices
+                - ecs:DescribeTaskDefinition
+                - ecs:DescribeTasks
+                - ecs:ListTasks
+                - ecs:RegisterTaskDefinition
+                - ecs:UpdateService
+                Effect: Allow
+                Resource: "*"
+        - PolicyName: !Sub ${AWS::StackName}CodeStarPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Action:
+                - codestar-connections:UseConnection
+                Effect: Allow
+                Resource:
+                  !Ref CodeStarConnection
+        - PolicyName: !Sub ${AWS::StackName}CodePipelinePolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Action:
+                - s3:*
+                - logs:CreateLogGroup
+                - logs:CreateLogStream
+                - logs:PutLogEvents
+                - cloudformation:*
+                - iam:PassRole
+                - iam:CreateRole
+                - iam:DetachRolePolicy
+                - iam:DeleteRolePolicy
+                - iam:PutRolePolicy
+                - iam:DeleteRole
+                - iam:AttachRolePolicy
+                - iam:GetRole
+                - iam:PassRole
+                Effect: Allow
+                Resource: '*'
+        - PolicyName: !Sub ${AWS::StackName}CodePipelineBuildPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Action:
+                - codebuild:StartBuild
+                - codebuild:StopBuild
+                - codebuild:RetryBuild
+                Effect: Allow
+                Resource: !Join
+                  - ''
+                  - - 'arn:aws:codebuild:'
+                    - !Ref AWS::Region
+                    - ':'
+                    - !Ref AWS::AccountId
+                    - ':project/'
+                    - !GetAtt CodeBuildBakeImageStack.Outputs.CodeBuildProjectName  
+```
+
+With this role, we're granting permissions for CodePipeline to perform tasks such as deploying ECS services, using CodeStar connections, accessing S3 buckets, managing CloudFormation stacks, and interacting with IAM roles and policies. It allows CodePipeline to describe and manipulate ECS services and task definitions, start and stop CodeBuild projects, and create and manage IAM roles.
+
+We now need to go back and update our CICD `config.toml` to pass the parameters we added to our CICD `template.yaml`.
+
+```toml
+[deploy]
+bucket = 'jh-cfn-artifacts'
+region = 'us-east-1'
+stack_name = 'CrdCicd'
+
+[parameters]
+ServiceStack = 'CrdSrvBackendFlask'
+ClusterStack = 'CrdCluster'
+GitHubBranch = 'prod'
+GithubRepo = 'aws-bootcamp-cruddur-2023'
+```
+
+We might be ready to deploy. To test, we make our `cicd-deploy` script exectuable, then run it. 
 
