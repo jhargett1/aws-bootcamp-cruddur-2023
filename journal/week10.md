@@ -1,4 +1,4 @@
-# Week 10 — CloudFormation Part 1
+# Week 10-11 — CloudFormation
 
 We started off CloudFormation with a guest instructor Rohini Gaonkar, an AWS Sr. Dev Advocate leading instruction along with Andrew. We walked through setting up a basic CloudFormation template deploying an ECS Cluster. We also created a `deploy` script that deployed the cluster, along with a new S3 bucket named `jh-cfn-artifacts`.  In addition to this, we add a task to our `.gitpod.yml` file to install `cfn-lint`. Per ChatGPT, "`cfn-lint` is a tool used for linting CloudFormation templates, which checks for syntactical errors, best practices, and adherence to standards. It ensures the correctness and quality of the CloudFormation template."  
 
@@ -3661,7 +3661,7 @@ This should completely flesh out our `codebuild.yaml`. We move back over to our 
       ProviderType: GitHub
 ```
 
-No properties to define here. `ProviderType` indicates we're building a CodeStar connection to connect us to our GitHub repository. 
+No properties defined here. `ProviderType` indicates we're building a CodeStar connection to connect us to our GitHub repository. 
 
 We're now ready to begin working on the pipeline resource. We implement this in our CICD template, including all 3 stages; source, build, deploy:
 
@@ -3856,4 +3856,419 @@ GithubRepo = 'aws-bootcamp-cruddur-2023'
 ```
 
 We might be ready to deploy. To test, we make our `cicd-deploy` script exectuable, then run it. 
+
+![15 31 into CFN CICD Part 2 cicdlayererrors](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/5c2eb838-a36a-4136-8b31-5b930a2b0e6a)
+
+To fix the first error received, we go back to our CICD `template.yaml` file and define the `ConnectionName` property of the `CodeStarConnections::Connection`. 
+
+```yaml
+    Type: AWS::CodeStarConnections::Connection
+    Properties: 
+      ConnectionName: !Sub ${AWS::StackName}-connection    
+      ProviderType: GitHub
+```
+
+We will need to add an S3 bucket to fix the 3rd error. We decide to do this manually, navigating to S3 in AWS named `codepipeline-cruddur-artifacts-jh`. 
+
+![image](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/c718c478-c6eb-483e-bd58-bd722d5e83b0)
+
+Then we went back to our workspace and added a parameter for our `ArtifactBucketName` to our `config.toml` and `template.yaml`.
+
+```toml
+[deploy]
+bucket = 'jh-cfn-artifacts'
+region = 'us-east-1'
+stack_name = 'CrdCicd'
+
+[parameters]
+ServiceStack = 'CrdSrvBackendFlask'
+ClusterStack = 'CrdCluster'
+GitHubBranch = 'prod'
+GithubRepo = 'aws-bootcamp-cruddur-2023'
+ArtifactBucketName = 'codepipeline-cruddur-artifacts-jh'
+```
+
+```yaml
+  ArtifactBucketName:
+    Type: String   
+```
+
+Next we added an `ArtifactStore` property to our pipeline:
+
+```yaml
+  Pipeline:
+    # https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-codepipeline-pipeline.html
+    Type: AWS::CodePipeline::Pipeline
+    Properties: 
+      ArtifactStore:
+        Location: !Ref ArtifactBucketName
+        Type: S3    
+```
+
+We run `cicd-deploy` one more time: 
+
+![19 14 into CFN CICD Part 2 packageerror](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/7af16e8b-95a2-444f-a414-4315a036dbd2)
+
+To try and fix this error, we added an `aws cloudformation package` command to the `cicd-deploy` script: 
+
+```sh
+#! /usr/bin/env bash
+set -e #stop the execution of the script if it fails
+
+CFN_PATH="/workspace/aws-bootcamp-cruddur-2023/aws/cfn/cicd/template.yaml"
+CONFIG_PATH="/workspace/aws-bootcamp-cruddur-2023/aws/cfn/cicd/config.toml"
+PACKAGED_PATH="/workspace/aws-bootcamp-cruddur-2023/tmp/packaged-template.yaml"
+PARAMETERS=$(cfn-toml params v2 -t $CONFIG_PATH)
+echo $CFN_PATH
+
+cfn-lint $CFN_PATH
+
+BUCKET=$(cfn-toml key deploy.bucket -t $CONFIG_PATH)
+REGION=$(cfn-toml key deploy.region -t $CONFIG_PATH)
+STACK_NAME=$(cfn-toml key deploy.stack_name -t $CONFIG_PATH)
+
+# package
+# -----------------
+echo "== packaging CFN to S3..."
+aws cloudformation package \
+  --template-file $CFN_PATH \
+  --s3-bucket $BUCKET \
+  --s3-prefix cicd-package \
+  --region $REGION \
+  --output-template-file "$PACKAGED_PATH"
+
+aws cloudformation deploy \  
+  --stack-name $STACK_NAME \
+  --s3-bucket $BUCKET \
+  --s3-prefix cicd \
+  --region $REGION \
+  --template-file "$PACKAGED_PATH" \
+  --no-execute-changeset \
+  --tags group=cruddur-cicd \
+  --parameter-overrides $PARAMETERS \
+  --capabilities CAPABILITY_NAMED_IAM
+```
+
+I asked ChatGPT why we needed to add a package command to the script, and this is what it told me: 
+
+"The `aws cloudformation package` command is used to transform and package a CloudFormation template before deploying it. It prepares the template for deployment by uploading any local artifacts referenced in the template to an Amazon S3 bucket. This is necessary because CloudFormation has a limit on the template size, so large templates or templates with inline code may need to be packaged separately."
+
+This is why we defined a new variable `PACKAGED_PATH`. For this, we added a new folder to our root directory called `tmp`, then updated our `.gitignore` file to include it and everything in it with a wildcard:
+
+```.gitignore
+docker/**/*
+frontend-react-js/build/*
+*.env
+node_modules
+.aws-sam
+build.toml
+tmp/*
+```
+
+This pathing was added as our script will now generate a new `packaged-template.yaml` file when we run it. Just as ChatGPT told us to "package a CloudFormation template before deploying it."
+
+We attempt our `cicd-deploy` script again, receiving the same message as before. Andrew notes that the error isn't an error and in fact is a warning (as noted by the code "W3002"), so we comment out the line in our script that stops the execution if any part fails.
+
+```sh
+#! /usr/bin/env bash
+#set -e #stop the execution of the script if it fails
+```
+
+Then we deploy again. We still receive the warning, but the changeset deploys.
+
+![24 20 into CFN CICD Part 2 cicddeploywithwarning](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/af8d6d74-187c-4d18-99a8-4d3666c43e1a)
+
+We know this worked, because we now have a `packaged-template.yaml` file in the `tmp` directory we created:
+
+![image](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/685eea40-42b2-4f1a-a510-d121d3c0eff4)
+
+We open the `packaged-template.yaml` to see what it generated for the `TemplateUrl` property of the stack and it generated a `.template` file in the `codepipeline-cruddur-artifacts-jh` bucket with a path: 
+
+![image](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/2da4595f-e23a-4cb8-86df-72777256e15f)
+
+From CloudFormation, we execute the changeset. When I execute the changeset, I receive an error whereas Andrew does not. My error:
+
+![28 33 into CFN CICD Part 2 actionconfigurationerror](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/6758fd2c-9eda-4b93-9b7d-034d3db745e1)
+
+This is because my `template.yaml` is passing a property for Source configuration that's unrecognized. After sifting through the code, I find the error and adjust it. I had declared `Branchname` instead of `BranchName`.
+
+![28 33 into CFN CICD Part 2 capitalizationrules](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/0c3c86bd-e793-4872-af2c-d76cced70236)
+
+After fixing the code, I again run our `cicd-deploy` script, then execute the changeset from CloudFormation. This time, the stack is created successfully.
+
+![28 35 into CFN CICD Part 2  createcomplete](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/508ae0b9-c1ea-46cf-8364-3502f5273023)
+
+We head over to CodePipeline in AWS, then review our pipeline. It failed on the first attempt to execute.
+
+![29 02 into CFN CICD Part 2 pipelinefailed](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/0e6ed624-5d01-48fd-8b09-c75720417ba1)
+
+Andrew guides us over to Settings > Connections to show us this is due to the connection always being in a Pending status when first deployed.
+
+![29 08 into CFN CICD Part 2 pendingstatus](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/b802e32e-0c7b-4e4c-9729-7367132fb058)
+
+After we select the connection, then click "Update pending connection", our connection becomes available.
+
+![end of CFN CICD Part 2 connectionavailable](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/717a3bc3-30ae-4a4d-9795-e18c9f1640ad)
+
+This should complete our CICD layer. From here it's time to move onto implementing the frontend service, deploying it to CloudFront using S3 buckets. 
+
+## Frontend Service
+
+From our workspace, we make a new folder named `frontend` in our `./aws/cfn` directory. In the `frontend` folder, we create our `template.yaml` and `config.toml` files. We start with the `config.toml`: 
+
+```toml
+[deploy]
+bucket = 'jh-cfn-artifacts'
+region = 'us-east-1'
+stack_name = 'CrdFrontend'
+```
+
+Then starting working on the frontend `template.yaml`. We start by adding our description, noting what we're defining in the template: 
+
+```yaml
+AWSTemplateFormatVersion: 2010-09-09
+Description: | 
+  - CloudFront Distribution
+  - S3 Bucket for www.
+  - S3 Bucket for root domain
+  - Bucket Policy
+Parameters: 
+Resources: 
+```
+
+We start defining our buckets that we need:
+
+```yaml
+  WWWBucket:
+    # https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-properties-s3-bucket.html
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Ref WwwBucketName 
+  RootBucket: 
+    # https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-properties-s3-bucket.html
+    Type: AWS::S3::Bucket
+    #DeletionPolicy: Retain
+    Properties:
+      BucketName: !Ref RootBucketName        
+```
+
+We also add these paremeters we're referencing here: 
+
+```yaml
+Parameters: 
+  WwwBucketName:
+    Type: String
+  RootBucketName:
+    Type: String
+```
+
+Then we work through the properties for the buckets: 
+
+```yaml
+  WWWBucket:
+    # https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-properties-s3-bucket.html
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Ref WwwBucketName 
+      WebsiteConfiguration: 
+        RedirectAllRequestsTo:
+          HostName: !Ref RootBucketName  
+  RootBucket: 
+    # https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-properties-s3-bucket.html
+    Type: AWS::S3::Bucket
+    #DeletionPolicy: Retain
+    Properties:
+      BucketName: !Ref RootBucketName    
+      WebsiteConfiguration: 
+        IndexDocument: index.html
+        ErrorDocument: error.html
+```
+
+The `WWWBucket` is configured to redirect all requests to the `RootBucket`. The `RootBucket` has public access enabled and is configured as a website with an index document and an error document.
+
+We next start implementing the CloudFront Distribution: 
+
+```yaml
+  Distribution:
+    # https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-cloudfront-distribution.html#aws-resource-cloudfront-distribution
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Aliases:
+          - thejoshdev.com
+          - www.thejoshdev.com
+        Comment: Frontend React Js for Cruddur
+        Enabled: true
+        HttpVersion: http2and3
+        DefaultRootObject: index.html                
+        Origins:
+          - DomainName: !GetAtt RootBucket.DomainName
+            Id: RootBucketOrigin
+            S3OriginConfig: {}
+        DefaultCacheBehavior:
+          TargetOriginId: RootBucketOrigin
+          ForwardedValues:
+            QueryString: false
+            Cookies:
+              Forward: none
+          ViewerProtocolPolicy: redirect-to-https
+        ViewerCertificate:
+          AcmCertificateArn: !Ref CertificateArn
+          SslSupportMethod: sni-only
+```
+
+Let's break down these properties: 
+
+`Aliases`: Specifies the domain names (CNAMEs) associated with the CloudFront distribution. Requests made to the domain names provided will be routed to the CloudFront distribution.
+
+`HttpVersion`: fairly self explanatory, but this property specifies the support HTTP versions for the CloudFront distribution
+
+`DefaultRootObject`: When a request is made to the distribution's domain name, CloudFront will return the specified object, in our case, `index.html`
+
+`Origins`: Specifies the origins (sources) from which CloudFront fetches content. An origin can be an S3 bucket, an EC2 instance, or an Elastic Load Balancer, among others.
+
+`DefaultCacheBehavior`: Configures the default cache behavior for the CloudFront distribution, which determines how CloudFront caches and forwards requests to the origin when there is no specific cache behavior matching the requested URL path. 
+
+`ViewerCertificate`: Configures the SSL/TLS certificate for the CloudFront distribution, enabling HTTPS support.
+
+We also reference the `CertificateArn` from our cluster layer, so we add this as a parameter:
+
+```yaml
+Parameters: 
+  CertificateArn:
+    Type: String
+```
+
+From here, we need to add our bucket policy. This will add permissions for the root bucket, as all requests to the `WWWBucket` are forwarded to the `RootBucket`:
+
+```yaml
+  RootBucketPolicy:
+    # https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-properties-s3-policy.html
+    Type: AWS::S3::BucketPolicy
+    Properties: 
+      Bucket: !Ref RootBucket
+      PolicyDocument:
+        Statement: 
+          - Action:
+              - 's3:GetObject'
+            Effect: Allow
+            Resource: !Sub 'arn:aws:s3:::${RootBucket}/*'
+            Principal: '*'
+```
+
+All that should be left to add to our frontend `template.yaml` is a record set for each bucket. That will define the DNS records within Route53 for us. 
+
+```yaml
+  RootBucketDomain:
+    # https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-properties-route53-recordset.html
+    Type: AWS::Route53::RecordSet
+    Properties: 
+      HostedZoneName: !Sub ${RootBucketName}.
+      Name: !Sub ${RootBucketName}.
+      Type: A
+      AliasTarget:
+        DNSName: !GetAtt CloudFrontDistribution.DomainName
+        # https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-properties-route53-aliastarget.html#cfn-route53-aliastarget-hostedzoneid
+        # Specify Z2FDTNDATAQYW2. This is always the hosted zone ID when you create an alias record that routes traffic to a CloudFront distribution.
+        HostedZoneId: Z2FDTNDATAQYW2
+  WwwBucketDomain:
+    # https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-properties-route53-recordset.html
+    Type: AWS::Route53::RecordSet
+    Properties: 
+      HostedZoneName: !Sub ${RootBucketName}.
+      Name: !Sub ${WwwBucketName}.
+      Type: A
+      AliasTarget:
+        DNSName: !GetAtt CloudFrontDistribution.DomainName
+        # https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-properties-route53-aliastarget.html#cfn-route53-aliastarget-hostedzoneid
+        # Specify Z2FDTNDATAQYW2. This is always the hosted zone ID when you create an alias record that routes traffic to a CloudFront distribution.
+        HostedZoneId: Z2FDTNDATAQYW2 
+```
+
+A little more on these properties: 
+
+`HostedZoneName`: The domain name associated with the Route 53 hosted zone where the record will be created. It is a string value that can be a domain name or a fully qualified domain name (FQDN).
+
+`Name`: The fully qualified domain name (FQDN) for the record.
+
+`Type`: The record type, which is set to A in this case. It can be one of the standard record types such as A, AAAA, CNAME, MX, TXT, etc. 
+
+`AliasTarget`: Specifies an alias target to route traffic to. It allows you to route traffic to an AWS resource using an alias instead of specifying explicit IP addresses. There's 2 additional properties of the `AliasTarget`:
+  - `DNSName`: Specifies the DNS name of the target resource to which the alias will point.
+  - `HostedZoneId`: Specifies the hosted zone ID of the target resource. In this case, we've set it to `Z2FDTNDATAQYW2`, which is the hosted zone ID for CloudFront distributions. This value is always used when creating an alias record that routes traffic to a CloudFront distribution.
+
+We also take this time to add our parameters to our `config.toml`:
+
+```toml
+[deploy]
+bucket = 'jh-cfn-artifacts'
+region = 'us-east-1'
+stack_name = 'CrdFrontend'
+
+[parameters]
+CertificateArn = 'arn:aws:acm:us-east-1:999999999999:certificate/9e966975-36c4-4808-ad6a-d20172eef714'
+WwwBucketName = 'www.thejoshdev.com'
+RootBucketName = 'thejoshdev.com'
+```
+
+At this point we should be ready to deploy, so in the `./bin/cfn` directory, we create a new file named `frontend-deploy`. Before we even begin writing the script, Andrew wants us to know that we're using the scripts to provision the infrastructure, not deploy. To make it less confusing, we renamed all of our scripts in the `./bin/cfn` directory, removing the `-deploy` from the name.
+
+![37 22 into CFN Static Website Hosting Frontend updatescripts](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/f99a95f2-8993-4bbc-966b-c754f88d452f)
+
+We copy over the script from our now named `cluster` script to our `frontend` script. As always, we adjust the `CFN_PATH` and `CONFIG_PATH` to reflect the pathing changes. 
+
+```sh
+#! /usr/bin/env bash
+set -e #stop the execution of the script if it fails
+
+CFN_PATH="/workspace/aws-bootcamp-cruddur-2023/aws/cfn/frontend/template.yaml"
+CONFIG_PATH="/workspace/aws-bootcamp-cruddur-2023/aws/cfn/frontend/config.toml"
+
+cfn-lint $CFN_PATH 
+
+BUCKET=$(cfn-toml key deploy.bucket -t $CONFIG_PATH)
+REGION=$(cfn-toml key deploy.region -t $CONFIG_PATH)
+STACK_NAME=$(cfn-toml key deploy.stack_name -t $CONFIG_PATH)
+PARAMETERS=$(cfn-toml params v2 -t $CONFIG_PATH)
+
+aws cloudformation deploy \
+    --stack-name $STACK_NAME \
+    --s3-bucket $BUCKET \
+    --s3-prefix frontend \
+    --region $REGION \
+    --template-file $CFN_PATH \
+    --no-execute-changeset \
+    --tags group="cruddur-frontend" \
+    --parameter-overrides $PARAMETERS \
+    --capabilities CAPABILITY_NAMED_IAM
+```
+
+We make the file executable with a `chmod` command in the terminal, then run the `frontend` script. 
+
+![37 22 into CFN Static Website Hosting Frontend cfnerror](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/f24a528b-a81d-418f-aff5-3c4c501cac09)
+
+We update the `RecordSet` property `DNSName` which falls under the `AliasTarget` property itself. The `!GetAtt` function is referencing the wrong distribution name:
+
+```yaml
+      AliasTarget:
+        DNSName: !GetAtt Distribution.DomainName
+```
+
+We update this for both `RecordSet` resources. After we make adjustments to the code, we attempt to provision the stack again and it creates a changeset successfully. Andrew notes before we execute it though, our `template.yaml` is going to generate an A record for our root domain, so we must remove the existing one from Route53 first so CloudFormation doesn't error out.
+
+![40 08 into CFN Static Website Hosting Frontend Route53Arecord](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/c17de15a-4554-4489-a985-ec788a84daa1)
+
+From here, we head back over to CloudFormation. We execute the changeset and get a `CREATE_FAILED` error.
+
+![44 36 into CFN Static Website Hosting Frontend createfailederror](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/1b3cccc4-1cf6-4954-ae0b-a325f112ee44)
+
+The error indicates we do not have permissions to `API: s3:PutBucketPolicy`. After going through the CFN documentation, we found we needed to set a property on our `RootBucket`.
+
+![49 17 into CFN Static Website Hosting Frontend rootbucketpolicy](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/b81bc690-af09-4a51-8793-3f48e6173c2f)
+
+When `BlockPublicPolicy` is set to `false`, it means that the bucket policy can allow public access to the objects in the bucket. By default, S3 buckets are private and do not allow public access. 
+
+We delete the stack from CloudFormation and try our `frontend` script again. The changeset is created, so we head over to CloudFormation and execute it. After about 20 minutes, it creates successfully.
+
+![end of CFN Static Website Hosting Frontend createcomplete](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/e0952a81-3a24-4a1a-9021-8c3c0b158ee4)
 
