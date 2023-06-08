@@ -4272,3 +4272,25 @@ We delete the stack from CloudFormation and try our `frontend` script again. The
 
 ![end of CFN Static Website Hosting Frontend createcomplete](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/e0952a81-3a24-4a1a-9021-8c3c0b158ee4)
 
+## CFN Security Best Practices
+
+I also completed Ashish's Security Best Practices video for CloudFormation. I kept detailed notes: 
+
+```txt
+AWS CloudFormation Security Best Practices – 
+
+AWS CloudFormation(AWS side)
+-	Compliance standard is what your business requires from an Infrastructure as Code service and is available in the region you need to operate in
+-	Amazon Organizations SCP – to restrict actions like creation, deletion, modification of production CloudFormation templates, resources, etc.
+-	AWS CloudTrail is enabled and monitored to trigger alerts for malicious activities e.g. changes to Production environment 
+-	AWS Audit Manager, IAM Access Analyzer, etc.
+
+AWS CloudFormation(client side)
+-	Access Control – Roles or IAM Users for making changes in Amazon CloudFormation template stacks or StackSets especially one for production
+-	Security of the CloudFormation – Configuration access
+-	Security in the CloudFormation – Code Security Best Practices – SCA, SAST, Secret Scanner, DAST implemented in the CI/CD pipeline
+-	Security of the CloudFormation entry points e.g. private points using AWS Private link
+-	Only use trusted Source Control for sending changes to CloudFormation
+-	Develop proves for continuously verifying if there is a change that may compromise the known state of a CI/CD pipeline
+
+```
