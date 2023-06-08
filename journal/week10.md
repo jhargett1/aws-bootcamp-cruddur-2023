@@ -4270,7 +4270,7 @@ When `BlockPublicPolicy` is set to `false`, it means that the bucket policy can 
 
 We delete the stack from CloudFormation and try our `frontend` script again. The changeset is created, so we head over to CloudFormation and execute it. After about 20 minutes, it creates successfully.
 
-![end of CFN Static Website Hosting Frontend createcomplete](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/e0952a81-3a24-4a1a-9021-8c3c0b158ee4)
+![end of CFN Static Website Hosting Frontend createcomplete](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/8afe81ce-40f2-4265-9a92-e21287c9c8c8)
 
 ## CFN Security Best Practices
 
