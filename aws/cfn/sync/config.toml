@@ -1,0 +1,9 @@
+[deploy]
+bucket = 'jh-cfn-artifacts'
+region = 'us-east-1'
+stack_name = 'CrdSyncRole'
+
+[parameters]
+GitHubOrg = 'jhargett1'
+RepositoryName = 'aws-bootcamp-cruddur-2023'
+OIDCProviderArn = ''
