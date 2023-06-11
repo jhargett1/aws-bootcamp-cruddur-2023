@@ -87,9 +87,11 @@ Resources:
                 ClusterName: 
                   Fn::ImportValue:
                     !Sub ${ClusterStack}ClusterName
-                ServiceName: 
-                  Fn::ImportValue:
-                    !Sub ${ServiceStack}ServiceName
+                # We decided not to use a cross-stack reference so we can
+                # tear down a service independently    
+                ServiceName: backend-flask
+                  # Fn::ImportValue:
+                   # !Sub ${ServiceStack}ServiceName
   CodePipelineRole:
     Type: AWS::IAM::Role
     Properties:
