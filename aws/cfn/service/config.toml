@@ -2,3 +2,7 @@
 bucket = 'jh-cfn-artifacts'
 region = 'us-east-1'
 stack_name = 'CrdSrvBackendFlask'
+
+[parameters]
+EnvFrontendUrl = 'https://thejoshdev.com'
+EnvBackendUrl = 'https://api.thejoshdev.com'
