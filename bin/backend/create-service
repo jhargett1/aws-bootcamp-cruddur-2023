@@ -1,0 +1,19 @@
+#! /usr/bin/bash
+
+CLUSTER_NAME="CrdClusterFargateCluster"
+SERVICE_NAME="backend-flask"
+TASK_DEFINITION_FAMILY="backend-flask"
+
+LATEST_TASK_DEFINITION_ARN=$(aws ecs describe-task-definition \
+--task-definition $TASK_DEFINITION_FAMILY \
+--query 'taskDefinition.taskDefinitionArn' \
+--output text)
+
+echo "TASK DEF ARN:"
+echo $LATEST_TASK_DEFINITION_ARN
+
+aws ecs create-service \
+--cluster $CLUSTER_NAME \
+--service-name $SERVICE_NAME \
+--desired-count 1 \
+--task-definition $LATEST_TASK_DEFINITION_ARN
