@@ -18,10 +18,11 @@ export default function ActivityForm(props) {
   const onsubmit = async (event) => {
     event.preventDefault();
     try {
-      const backend_url = `${process.env.REACT_APP_BACKEND_URL}/api/activities`
-      console.log('onsubmit payload', message)
       await getAccessToken()
       const access_token = localStorage.getItem("access_token")
+      console.log('activityform', access_token)      
+      const backend_url = `${process.env.REACT_APP_BACKEND_URL}/api/activities`
+      console.log('onsubmit payload', message)
       const res = await fetch(backend_url, {
         method: "POST",
         headers: {
