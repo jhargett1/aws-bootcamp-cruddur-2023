@@ -5,6 +5,8 @@ from flask import Flask
 from flask import request, g
 from flask_cors import cross_origin
 
+from aws_xray_sdk.core import xray_recorder
+
 from lib.rollbar import init_rollbar
 from lib.xray import init_xray
 from lib.cors import init_cors
