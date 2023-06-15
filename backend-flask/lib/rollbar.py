@@ -1,4 +1,3 @@
-from flask import current_app as app
 from flask import got_request_exception
 from time import strftime
 import os
