@@ -35,7 +35,7 @@ migrations_path = os.path.abspath(os.path.join(current_path, '..', '..','backend
 sys.path.append(migrations_path)
 migration_files = glob.glob(f"{migrations_path}/*")
 
-
+print(f"last_successful_run: {last_successful_run}")
 for migration_file in migration_files:
   filename = os.path.basename(migration_file)
   module_name = os.path.splitext(filename)[0]
