@@ -1,5 +1,7 @@
 # FREE AWS Cloud Project Bootcamp
 
+![](https://codebuild.us-east-1.amazonaws.com/badges?uuid=eyJlbmNyeXB0ZWREYXRhIjoia1Y3ek81dXNIWFNFS1ovMDlpakNDTXNoZmZVdEtmUG5kSFBOMzN3WTZnZGZWMCtpRFZzbk4rUkhrcDdDTnR5R1dkTkZ1OENUWGdQcU0wZ2h0SDgwMlkwPSIsIml2UGFyYW1ldGVyU3BlYyI6IjNoSHd6ekc4VENtQjY1QTQiLCJtYXRlcmlhbFNldFNlcmlhbCI6MX0%3D&branch=main)
+
 - Application: Cruddur
 - Cohort: 2023-A1
 
@@ -16,6 +18,7 @@ At the start of the bootcamp you need to create a new Github Repository from thi
 ## Journaling Homework
 
 The `/journal` directory contains
+
 
 - [x] [Week 0](journal/week0.md)
 - [x] [Week 1](journal/week1.md)
