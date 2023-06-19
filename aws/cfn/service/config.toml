@@ -6,3 +6,4 @@ stack_name = 'CrdSrvBackendFlask'
 [parameters]
 EnvFrontendUrl = 'https://thejoshdev.com'
 EnvBackendUrl = 'https://api.thejoshdev.com'
+DDBMessageTable = 'CrdDdb-DynamoDBTable-1XAZLLSMMFD6Q'
