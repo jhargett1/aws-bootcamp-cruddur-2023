@@ -7,9 +7,9 @@ from lib.cognito_jwt_token import jwt_required
 from flask_cors import cross_origin
 
 ## services
+from services.create_activity import *
 from services.home_activities import *
 from services.notifications_activities import *
-from services.create_activity import *
 from services.create_reply import *
 from services.search_activities import *
 from services.create_reply import *
@@ -29,6 +29,7 @@ def load(app):
   @jwt_required(on_error=default_home_feed)
   def data_home():
       data = HomeActivities.run(cognito_user_id=g.cognito_user_id)
+      CreateActivity.delete_old_activities('12-hours')
       return data, 200
 
   @app.route("/api/activities/notifications", methods=['GET'])

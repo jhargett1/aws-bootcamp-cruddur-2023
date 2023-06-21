@@ -42,7 +42,7 @@ class CreateActivity:
         'message': message
       }   
     else:
-      expires_at = (now + ttl_offset)
+      expires_at = (now + ttl_offset).astimezone(timezone.utc)
       uuid = CreateActivity.create_activity(cognito_user_id,message,expires_at)
 
       object_json = CreateActivity.query_object_activity(uuid)
@@ -61,4 +61,14 @@ class CreateActivity:
     sql = db.template('activities','object')
     return db.query_object_json(sql,{
       'uuid': uuid
+    })  
+  def delete_old_activities(ttl):
+    now = datetime.now(timezone.utc).astimezone()
+    expires_at = (now - timedelta(hours=12)).astimezone(timezone.utc)
+  
+    sql = db.template('activities', 'delete')
+    db.query_commit(sql, {
+      'expires_at': expires_at
     })
+  
+    return None
