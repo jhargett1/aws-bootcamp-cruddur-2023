@@ -10,11 +10,16 @@ INSERT INTO public.activities (user_uuid, message, expires_at)
 VALUES
   (
     (SELECT uuid from public.users WHERE users.handle = 'scubasteve' LIMIT 1),
-    'This was imported as seed data!',
-    current_timestamp + interval '10 day'
+    'I love my wife!',
+    current_timestamp
+  ),
+  (
+    (SELECT uuid from public.users WHERE users.handle = 'scubasteve' LIMIT 1),
+    'I love my wife!',
+    current_timestamp + interval '12 HOURS'
   ),
   (
     (SELECT uuid from public.users WHERE users.handle = 'khargett' LIMIT 1),
     'I am the wife!',    
-    current_timestamp + interval '10 day'
+    current_timestamp + interval '1 day'
   );

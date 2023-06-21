@@ -64,11 +64,11 @@ class CreateActivity:
     })  
   def delete_old_activities(ttl):
     now = datetime.now(timezone.utc).astimezone()
-    expires_at = (now - timedelta(hours=12)).astimezone(timezone.utc)
-  
+    expires_at = now - timedelta(hours=int(ttl.split('-')[0]))
+
     sql = db.template('activities', 'delete')
     db.query_commit(sql, {
-      'expires_at': expires_at
+        'expires_at': expires_at
     })
-  
+
     return None
