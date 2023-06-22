@@ -4,6 +4,10 @@
   align-items: flex-start;
 }
 
+.activity_content_wrap .message {
+  color: #fff
+}
+
 .activity_content {
   flex-grow: 1;
   padding-left: 12px;
