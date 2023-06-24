@@ -776,9 +776,43 @@ Updated `aws/cfn/service/config.toml`:
      - `EnvFrontendUrl`: Set to `'https://thejoshdev.com'`.
      - `EnvBackendUrl`: Set to `'https://api.thejoshdev.com'`.
 
+```toml
+[deploy]
+bucket = 'jh-cfn-artifacts'
+region = 'us-east-1'
+stack_name = 'CrdSrvBackendFlask'
+
+[parameters]
+EnvFrontendUrl = 'https://thejoshdev.com'
+EnvBackendUrl = 'https://api.thejoshdev.com'
+```
+
 Updated `bin/cfn/service`:
    - Uncommented the `PARAMETERS` variable assignment, which retrieves the parameters from the `config.toml` file.
    - Added the `--parameter-overrides $PARAMETERS` option to the `aws cloudformation deploy` command, which passes the retrieved parameters to the CloudFormation deployment.
+
+```sh
+#! /usr/bin/env bash
+set -e #stop the execution of the script if it fails
+CFN_PATH="/workspace/aws-bootcamp-cruddur-2023/aws/cfn/service/template.yaml"
+CONFIG_PATH="/workspace/aws-bootcamp-cruddur-2023/aws/cfn/service/config.toml"
+cfn-lint $CFN_PATH 
+BUCKET=$(cfn-toml key deploy.bucket -t $CONFIG_PATH)
+REGION=$(cfn-toml key deploy.region -t $CONFIG_PATH)
+STACK_NAME=$(cfn-toml key deploy.stack_name -t $CONFIG_PATH)
+PARAMETERS=$(cfn-toml params v2 -t $CONFIG_PATH)
+
+aws cloudformation deploy \
+    --stack-name $STACK_NAME \
+    --s3-bucket $BUCKET \
+    --s3-prefix backend-service \
+    --region $REGION \
+    --template-file $CFN_PATH \
+    --no-execute-changeset \
+    --tags group="cruddur-backend-flask" \
+    --parameter-overrides $PARAMETERS \
+    --capabilities CAPABILITY_NAMED_IAM
+```
   
 ##  Ensure CI/CD pipeline works and create activity works
 
@@ -786,75 +820,527 @@ Updated `backend-flask/app.py`:
   - Added token verification using `cognito_jwt_token.verify()` to authenticate the request.
   - Replaced the `user_handle` variable with `cognito_user_id` in the `CreateActivity.run()` function call.
     
+```py
+@app.route("/api/activities", methods=['POST','OPTIONS'])
+@cross_origin()
+def data_activities():
+  access_token = extract_access_token(request.headers)
+  try:
+    claims = cognito_jwt_token.verify(access_token)
+    cognito_user_id = claims['sub']
+
+    message = request.json['message']
+    ttl = request.json['ttl']
+    model = CreateActivity.run(message, cognito_user_id, ttl)
+    if model['errors'] is not None:
+      return model['errors'], 422
+    else:
+      return model['data'], 200
+  except TokenVerifyError as e:
+    # unauthenticated request
+    app.logger.debug(e)
+    return{}, 401  
+```
+
 Updated `backend-flask/db/sql/activities/create.sql`:
   - Modified the query to use `cognito_user_id` instead of `user_handle` to match the new database schema.
+
+```sql
+VALUES (
+  (SELECT uuid 
+    FROM public.users 
+    WHERE users.cognito_user_id = %(cognito_user_id)s
+    LIMIT 1
+  ),
+  %(message)s,
+```
     
 Updated `backend-flask/services/create_activity.py`:
   - Replaced the `user_handle` parameter with `cognito_user_id` in the `CreateActivity.run()` and `CreateActivity.create_activity()` functions.
+
+```py
+    if cognito_user_id == None or len(cognito_user_id) < 1:
+      model['errors'] = ['cognito_user_id_blank']
+```
+
+```py
+    else:
+      expires_at = (now + ttl_offset)
+      uuid = CreateActivity.create_activity(cognito_user_id,message,expires_at)
+```
 
 Updated `frontend-react-js/src/components/ActivityForm.js`:
   - Added the `getAccessToken()` function import from `../lib/CheckAuth`.
   - Retrieved the access token using `getAccessToken()` and added it to the `Authorization` header of the POST request.
 
-Updated `docker-compose.yml`:
-  - Modified the `dockerfile` entry for the `backend-flask` service to use `Dockerfile` instead of `Dockerfile.prod`.
+```js
+import React from "react";
+import process from 'process';
+import {ReactComponent as BombIcon} from './svg/bomb.svg';
+import {getAccessToken} from '../lib/CheckAuth';
+```
+
+```js
+    try {
+      const backend_url = `${process.env.REACT_APP_BACKEND_URL}/api/activities`
+      console.log('onsubmit payload', message)
+      await getAccessToken()
+      const access_token = localStorage.getItem("access_token")
+      const res = await fetch(backend_url, {
+        method: "POST",
+        headers: {
+          'Authorization': `Bearer ${access_token}`,
+          'Content-Type': 'application/json'
+        },
+```
 
 Updated `config.toml` file in the `aws/cfn/cicd` directory:
   - Updated the `GithubRepo` parameter from `'aws-bootcamp-cruddur-2023'` to `'jhargett1/aws-bootcamp-cruddur-2023'`.
+  - `ArtifactBucketName`: Set to `'codepipeline-cruddur-artifacts-jh'`.
+
+```yaml
+ServiceStack = 'CrdSrvBackendFlask'
+ClusterStack = 'CrdCluster'
+GitHubBranch = 'prod'
+GithubRepo = 'jhargett1/aws-bootcamp-cruddur-2023'
+ArtifactBucketName = 'codepipeline-cruddur-artifacts-jh'
+```
 
 CloudFormation:
 - Renamed the `CodeBuildBakeImageStack` stack to `CodeBuild`.
+
+```yaml
+  ArtifactBucketName:
+    Type: String    
+Resources: 
+  CodeBuild:
+    # https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-properties-stack.html
+    Type: AWS::CloudFormation::Stack
+    Properties: 
+```
+
 - Changed the `CodeBuildProjectName` output from the `CodeBuild` stack to reference the `CodeBuild` resource directly, instead of using the `GetAtt` intrinsic function.
 - Updated the `Deploy` action in the `CodePipeline` pipeline to reference the `CodeBuild` project name directly, instead of using the `GetAtt` intrinsic function.
+  
 Updated `aws/cfn/cicd/config.toml`:
-  - Added two new parameters under the `[parameters]` section:
-    - `ArtifactBucketName`: Set to `'codepipeline-cruddur-artifacts-jh'`.
-    - `BuildSpec`: Set to `'backend-flask/buildspec.yml'`.
+  - `BuildSpec`: Set to `'backend-flask/buildspec.yml'`.
+      
+```toml
+GitHubBranch = 'prod'
+GithubRepo = 'jhargett1/aws-bootcamp-cruddur-2023'
+ArtifactBucketName = 'codepipeline-cruddur-artifacts-jh'
+BuildSpec = 'backend-flask/buildspec.yml'
+```
+
 Updated `aws/cfn/cicd/nested/codebuild.yaml`:
   - Added the `ArtifactBucketName` parameter to the `Parameters` section.
   - Added the `BuildSpec` parameter to the `Parameters` section.
+
+```yaml
+  BuildSpec:
+    Type: String
+    Default: 'buildspec.yaml'
+  ArtifactBucketName:
+    Type: String
+```
+
 Updated `aws/cfn/cicd/template.yaml`:
   - Added the `ArtifactBucketName` parameter to the `Parameters` section.
   - Added the `BuildSpec` parameter to the `Parameters` section.
+
+```yaml
+      Parameters:
+        ArtifactBucketName: !Ref ArtifactBucketName
+        BuildSpec: !Ref BuildSpec
+```
+
   - Added a new policy to the `CodeBuild` stack. This policy allows the `CodeBuild` project to access the `ArtifactBucketName` S3 bucket.
+
+```yaml
+      Policies:
+        - PolicyName: !Sub ${AWS::StackName}S3ArtifactAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Action:
+                - s3:*
+                Effect: Allow
+                Resource:
+                  - !Sub arn:aws:s3:::${ArtifactBucketName}
+                  - !Sub arn:aws:s3:::${ArtifactBucketName}/*  
+```
+
   - Added a new policy to the `CodePipeline` stack. This policy allows the `CodePipeline` pipeline to access the `ArtifactBucketName` S3 bucket.
+
+```yaml
+      Policies:
+        # When the Application Source downloads the code,
+        # it needs to zip it and place it a bucket, so we need
+        # to supply an artifacts bucket.
+        - PolicyName: !Sub ${AWS::StackName}S3ArtifactAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Action:
+                - s3:*
+                Effect: Allow
+                Resource:
+                  - !Sub arn:aws:s3:::${ArtifactBucketName}
+                  - !Sub arn:aws:s3:::${ArtifactBucketName}/*  
+```
  
 ## Refactor to use JWT Decorator in Flask App
 
 `backend-flask/app.py`:
 - Added `from flask import request, g` in the import section.
+
+```py
+from flask import request, g
+```
+  
 - Replaced the `CognitoJwtToken` import with `jwt_required` from `lib.cognito_jwt_token`.
+ 
+```py
+from lib.cognito_jwt_token import jwt_required
+```
+
 - Updated the `data_message_groups`, `data_messages`, `data_create_message`, `data_home`, `data_activities`, and `data_update_profile` functions to use the `jwt_required` decorator.
+ 
+```py
+@app.route("/api/message_groups", methods=['GET'])
+@jwt_required()
+def data_message_groups():
+  model = MessageGroups.run(cognito_user_id=g.cognito_user_id)
+  if model['errors'] is not None:
+    return model['errors'], 422
+  else:
+    return model['data'], 200   
+```
+
+```py
+@app.route("/api/messages/<string:message_group_uuid>", methods=['GET'])
+@jwt_required()
+def data_messages(message_group_uuid):
+  model = Messages.run(
+    cognito_user_id=g.cognito_user_id,
+    message_group_uuid=message_group_uuid
+    )
+  if model['errors'] is not None:
+    return model['errors'], 422
+  else:
+    return model['data'], 200
+```
+
+```py
+@app.route("/api/messages", methods=['POST','OPTIONS'])
+@cross_origin()
+@jwt_required()
+def data_create_message():
+  message_group_uuid   = request.json.get('message_group_uuid',None)
+  user_receiver_handle = request.json.get('handle',None)
+  message = request.json['message']
+  if message_group_uuid == None:
+    # Create for the first time
+    model = CreateMessage.run(
+      mode="create",
+      message=message,
+      cognito_user_id=g.cognito_user_id,
+      user_receiver_handle=user_receiver_handle
+    )
+  else:
+    # Push onto existing Message Group
+    model = CreateMessage.run(
+      mode="update",
+      message=message,
+      message_group_uuid=message_group_uuid,
+      cognito_user_id=g.cognito_user_id
+    )
+  if model['errors'] is not None:
+    return model['errors'], 422
+  else:
+    return model['data'], 200 
+```
+
+```py
+@app.route("/api/activities/home", methods=['GET'])
+#@xray_recorder.capture('activities_home')
+@jwt_required(on_error=default_home_feed)
+def data_home():
+    data = HomeActivities.run(cognito_user_id=g.cognito_user_id)
+    return data, 200
+```
+
+```py
+@app.route("/api/activities", methods=['POST','OPTIONS'])
+@cross_origin()
+@jwt_required()
+def data_activities():
+  message = request.json['message']
+  ttl = request.json['ttl']
+  model = CreateActivity.run(message, g.cognito_user_id, ttl)
+  if model['errors'] is not None:
+    return model['errors'], 422
+  else:
+    return model['data'], 200
+```
+
+```py
+@app.route("/api/profile/update", methods=['POST','OPTIONS'])
+@cross_origin()
+@jwt_required()
+def data_update_profile():
+  bio          = request.json.get('bio',None)
+  display_name = request.json.get('display_name',None)
+  model = UpdateProfile.run(
+    cognito_user_id=g.cognito_user_id,
+    bio=bio,
+    display_name=display_name
+  )
+  if model['errors'] is not None:
+    return model['errors'], 422
+  else:
+    return model['data'], 200
+```
+
 - Removed the `cognito_jwt_token` initialization.
 - Added a new function `default_home_feed` to handle unauthenticated requests in `data_home`.
+ 
+```py
+def default_home_feed(e):
+  # unauthenticated request
+  app.logger.debug(e)
+  app.logger.debug("unauthenticated")
+  data = HomeActivities.run()
+  return data, 200
+```
 
 `backend-flask/lib/cognito_jwt_token.py`:
 - Added the `jwt_required` decorator function, which wraps the decorated function with JWT token verification.
-- Imported `wraps`, `partial`, `request`, `g`, and `os` in the import section.
 - Updated the `jwt_required` function to store the user ID in the `g` object and handle unauthenticated requests.
+
+```py
+def jwt_required(f=None, on_error=None):
+    if f is None:
+        return partial(jwt_required, on_error=on_error)
+
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        cognito_jwt_token = CognitoJwtToken(
+            user_pool_id=os.getenv("AWS_COGNITO_USER_POOL_ID"), 
+            user_pool_client_id=os.getenv("AWS_COGNITO_USER_POOL_CLIENT_ID"),
+            region=os.getenv("AWS_DEFAULT_REGION")
+        )
+        access_token = extract_access_token(request.headers)
+        try:
+            claims = cognito_jwt_token.verify(access_token)
+            # is this a bad idea using a global?
+            g.cognito_user_id = claims['sub']  # storing the user_id in the global g object
+        except TokenVerifyError as e:
+            # unauthenticated request
+            app.logger.debug(e)
+            if on_error:
+                return on_error(e)
+            return {}, 401
+        return f(*args, **kwargs)
+    return decorated_function  
+```
+
+- Imported `wraps`, `partial`, `request`, `g`, and `os` in the import section.
+ 
+```py
+from functools import wraps, partial
+from flask import request, g
+import os
+```
 
 `frontend-react-js/src/components/ReplyForm.js`:
 - Added a new event handler `close` to handle closing the popup form.
+ 
+```js
+  const close = (event)=> {
+    if (event.target.classList.contains("reply_popup")) {
+      props.setPopped(false)
+    }
+  }
+```
+
 - Added the `reply_popup` class to the wrapping div to apply styling for the reply popup.
+
+```js
+  if (props.popped === true) {
+    return (
+      <div className="popup_form_wrap reply_popup" onClick={close}>
+        <div className="popup_form">
+          <div className="popup_heading">
+          </div>
+```
 
 ## Refactor App.py
 
 `backend-flask/app.py`:
 - Imported and initialized various libraries and modules such as `init_rollbar`, `init_xray`, `init_cors`, and `init_cloudwatch`.
+
+```py
+import os 
+import sys
+
+from flask import Flask
+from flask import request, g
+from flask_cors import cross_origin
+
+from lib.rollbar import init_rollbar
+from lib.xray import init_xray
+from lib.cors import init_cors
+from lib.cloudwatch import init_cloudwatch
+from lib.honeycomb import init_honeycomb
+from lib.cognito_jwt_token import jwt_required
+```
+
 - Updated the routes to use the `model_json` function to handle the response data.
-- Updated the `health_check` route to return the response data using the `model_json` function.
-- Updated the `data_message_groups`, `data_messages`, `data_create_message`, `data_handle`, `data_search`, `data_activities`, `data_show_activity`, and `data_activities_reply` routes to return the response data using the `model_json` function.
-- Updated the `data_users_short` and `data_update_profile` routes to return the response data using the `model_json` function.
+
+```py
+def model_json(model):
+  if model['errors'] is not None:
+    return model['errors'], 422
+  else:
+    return model['data'], 200 
+```
+
 - Added a new file `backend-flask/lib/cloudwatch.py` that defines the `init_cloudwatch` function for configuring the logger to use CloudWatch for logging.
+
+```py
+import watchtower
+import logging
+from flask import request
+
+# Configuring Logger to Use CloudWatch
+# LOGGER = logging.getLogger(__name__)
+# LOGGER.setLevel(logging.DEBUG)
+# console_handler = logging.StreamHandler()
+# cw_handler = watchtower.CloudWatchLogHandler(log_group='cruddur')
+# LOGGER.addHandler(console_handler)
+# LOGGER.addHandler(cw_handler)
+# LOGGER.info("test log")
+
+def init_cloudwatch(response):
+  timestamp = strftime('[%Y-%b-%d %H:%M]')
+  LOGGER.error('%s %s %s %s %s %s', timestamp, request.remote_addr, request.method, request.scheme, request.full_path, response.status)
+  return response
+
+  #@app.after_request
+  #def after_request(response):
+  #  init_cloudwatch(response)
+```
+
 - Added a new file `backend-flask/lib/cors.py` that defines the `init_cors` function for initializing CORS (Cross-Origin Resource Sharing) with Flask.
+
+```py
+from flask_cors import CORS
+import os
+
+def init_cors(app):
+  frontend = os.getenv('FRONTEND_URL')
+  backend = os.getenv('BACKEND_URL')
+  origins = [frontend, backend]
+  cors = CORS(
+    app, 
+    resources={r"/api/*": {"origins": origins}},
+    headers=['Content-Type', 'Authorization'], 
+    expose_headers='Authorization',
+    methods="OPTIONS,GET,HEAD,POST"
+  )
+```
+
 - Added a new file `backend-flask/lib/honeycomb.py` that defines the `init_honeycomb` function for initializing tracing and instrumentation with Flask using Honeycomb.
+
+```py
+from opentelemetry import trace
+from opentelemetry.instrumentation.flask import FlaskInstrumentor
+from opentelemetry.instrumentation.requests import RequestsInstrumentor
+from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor
+from opentelemetry.sdk.trace.export import ConsoleSpanExporter, SimpleSpanProcessor
+
+# Initialize tracing and an exporter that can send data to Honeycomb
+provider = TracerProvider()
+processor = BatchSpanProcessor(OTLPSpanExporter())
+provider.add_span_processor(processor)
+
+# OTEL ----------
+# Show this in the logs within the backend-flask app (STDOUT)
+#simple_processor = SimpleSpanProcessor(ConsoleSpanExporter())
+#provider.add_span_processor(simple_processor)
+
+trace.set_tracer_provider(provider)
+tracer = trace.get_tracer(__name__)
+
+# Initialize automatic instrumentation with Flask
+def init_honeycomb(app):
+  FlaskInstrumentor().instrument_app(app)
+  RequestsInstrumentor().instrument()
+```
+
 - Added a new file `backend-flask/lib/rollbar.py` that defines the `init_rollbar` function for initializing Rollbar error reporting with Flask.
+
+```py
+from flask import current_app as app
+from flask import got_request_exception
+from time import strftime
+import os
+import rollbar
+import rollbar.contrib.flask
+
+def init_rollbar(app):
+  rollbar_access_token = os.getenv('ROLLBAR_ACCESS_TOKEN')
+  rollbar.init(
+      # access token
+      rollbar_access_token,
+      # environment name
+      'production',
+      # server root directory, makes tracebacks prettier
+      root=os.path.dirname(os.path.realpath(__file__)),
+      # flask already sets up logging
+      allow_logging_basic_config=False)
+  # send exceptions from `app` to rollbar, using flask's signal system.
+  got_request_exception.connect(rollbar.contrib.flask.report_exception, app)
+  return rollbar
+```
+
 - Added a new file `backend-flask/lib/xray.py` that defines the `init_xray` function for configuring AWS X-Ray for tracing with Flask.
-- The import statement `from aws_xray_sdk.core import xray_recorder` has been added to `backend-flask/app.py`, suggesting the application is using the AWS X-Ray SDK for tracing and monitoring purposes.
+
+```py
+import os
+from aws_xray_sdk.core import xray_recorder
+from aws_xray_sdk.ext.flask.middleware import XRayMiddleware
+
+def init_xray(app):
+  xray_url = os.getenv("AWS_XRAY_URL")
+  xray_recorder.configure(service='backend-flask', dynamic_naming=xray_url)
+  XRayMiddleware(app, xray_recorder)
+```
 
 `frontend-react-js/src/pages/NotificationsFeedPage.js`:
 - Imported the `checkAuth` and `getAccessToken` functions from `lib/CheckAuth`.
+ 
+```js
+import {checkAuth, getAccessToken} from 'lib/CheckAuth';
+```
+
 - Updated the `loadData` function to call `getAccessToken` before making the API request and retrieve the access token from `localStorage`.
+
+```js
+  const loadData = async () => {
+    try {
+      const backend_url = `${process.env.REACT_APP_BACKEND_URL}/api/activities/notifications`
+      await getAccessToken()
+      const access_token = localStorage.getItem("access_token")
+      const res = await fetch(backend_url, {
+        headers: {
+          Authorization: `Bearer ${access_token}`
+        },  
+```
+
 - Removed the import statement for the `Cookies` module.
 
 ## Refactor Flask Routes
@@ -862,32 +1348,240 @@ Updated `aws/cfn/cicd/template.yaml`:
 `backend-flask/app.py`:
 - The import statements have been updated to include the new routes and the `model_json` helper function from the `lib.helpers` module.
 - The previous route handlers have been removed, and instead, the new route modules are imported and loaded using their respective load functions.
+ 
+```py
+from lib.helpers import model_json
+
+import routes.general
+import routes.activities
+import routes.users
+import routes.messages
+```
+
 - The `init_rollbar` function has been removed from the `lib.rollbar` module, and the corresponding import statement has been removed from the `backend-flask/app.py` file.
+ 
+![image](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/92f95c02-2b37-49c5-bf91-9d56f5d9da9b)
 
 `backend-flask/lib/helpers.py`:
 - This is a new file that defines the `model_json` helper function, which extracts the data and errors from a model dictionary and returns them with the appropriate status code.
 
+```py
+def model_json(model):
+  if model['errors'] is not None:
+    return model['errors'], 422
+  else:
+    return model['data'], 200
+```
+
 `backend-flask/lib/rollbar.py`:
 - The `app` import statement has been removed, suggesting that the `init_rollbar` function may no longer depend on the Flask `current_app`.
+
+![image](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/b29305e2-5c46-4c5b-9510-28d70111a0fb)
 
 `backend-flask/routes/general.py`:
 - This is a new file that defines the route handlers for general endpoints, such as a health check endpoint.
 - Currently, the health check route simply returns a JSON response indicating success.
+
+```py
+from flask import request, g
+
+def load(app):
+  @app.route('/api/health-check')
+  def health_check():
+    return {'success': True, 'ver': 1}, 200
+
+  #@app.route('/rollbar/test')
+  #def rollbar_test():
+  #  g.rollbar.report_message('Hello World!', 'warning')
+  #  return "Hello World!"
+```
 
 `backend-flask/routes/activities.py`:
 - This is a new file that defines the route handlers for activity-related endpoints, such as fetching home activities, creating activities, and searching activities.
 - The existing route handlers for home activities, notifications, search activities, creating activities, and showing activities have been moved to this file.
 - The `model_json` helper function is imported and used to return the appropriate JSON response.
 
+```py
+## flask
+from flask import request, g
+
+## decorators
+from aws_xray_sdk.core import xray_recorder
+from lib.cognito_jwt_token import jwt_required
+from flask_cors import cross_origin
+
+## services
+from services.home_activities import *
+from services.notifications_activities import *
+from services.create_activity import *
+from services.create_reply import *
+from services.search_activities import *
+from services.show_activity import *
+from services.create_reply import *
+
+## helpers
+from lib.helpers import model_json
+
+def load(app):
+  def default_home_feed(e):
+    app.logger.debug(e)
+    app.logger.debug("unauthenticated")
+    data = HomeActivities.run()
+    return data, 200
+
+  @app.route("/api/activities/home", methods=['GET'])
+  #@xray_recorder.capture('activities_home')
+  @jwt_required(on_error=default_home_feed)
+  def data_home():
+      data = HomeActivities.run(cognito_user_id=g.cognito_user_id)
+      return data, 200
+
+  @app.route("/api/activities/notifications", methods=['GET'])
+  def data_notifications():
+    data = NotificationsActivities.run()
+    return data, 200 
+
+  @app.route("/api/activities/search", methods=['GET'])
+  def data_search():
+    term = request.args.get('term')
+    model = SearchActivities.run(term)
+    return model_json(model) 
+
+  @app.route("/api/activities", methods=['POST','OPTIONS'])
+  @cross_origin()
+  @jwt_required()
+  def data_activities():
+    message = request.json['message']
+    ttl = request.json['ttl']
+    model = CreateActivity.run(message, g.cognito_user_id, ttl)
+    return model_json(model) 
+
+  @app.route("/api/activities/<string:activity_uuid>", methods=['GET'])
+  #@xray_recorder.capture('activities_show')
+  def data_show_activity(activity_uuid):
+    data = ShowActivity.run(activity_uuid=activity_uuid)
+    return data, 200
+
+  @app.route("/api/activities/<string:activity_uuid>/reply", methods=['POST','OPTIONS'])
+  @cross_origin()
+  def data_activities_reply(activity_uuid):
+    user_handle  = 'scubasteve'
+    message = request.json['message']
+    model = CreateReply.run(message, user_handle, activity_uuid)
+    return model_json(model)
+```
+
 `backend-flask/routes/messages.py`:
 - This is a new file that defines the route handlers for message-related endpoints, such as fetching message groups, fetching messages within a group, and creating messages.
 - The existing route handlers for message groups, messages, and creating messages have been moved to this file.
 - The `model_json` helper function is imported and used to return the appropriate JSON response.
+ 
+```py
+## flask
+from flask import request, g
+
+## decorators
+from aws_xray_sdk.core import xray_recorder
+from lib.cognito_jwt_token import jwt_required
+from flask_cors import cross_origin
+
+## services
+from services.message_groups import MessageGroups
+from services.messages import Messages
+from services.create_message import CreateMessage
+
+## helpers
+from lib.helpers import model_json
+
+def load(app):  
+  @app.route("/api/message_groups", methods=['GET'])
+  @jwt_required()
+  def data_message_groups():
+    model = MessageGroups.run(cognito_user_id=g.cognito_user_id)
+    return model_json(model)   
+
+  @app.route("/api/messages/<string:message_group_uuid>", methods=['GET'])
+  @jwt_required()
+  def data_messages(message_group_uuid):
+    model = Messages.run(
+      cognito_user_id=g.cognito_user_id,
+      message_group_uuid=message_group_uuid
+      )
+    return model_json(model) 
+
+  @app.route("/api/messages", methods=['POST','OPTIONS'])
+  @cross_origin()
+  @jwt_required()
+  def data_create_message():
+    message_group_uuid   = request.json.get('message_group_uuid',None)
+    user_receiver_handle = request.json.get('handle',None)
+    message = request.json['message']
+    if message_group_uuid == None:
+      # Create for the first time
+      model = CreateMessage.run(
+        mode="create",
+        message=message,
+        cognito_user_id=g.cognito_user_id,
+        user_receiver_handle=user_receiver_handle
+      )
+    else:
+      # Push onto existing Message Group
+      model = CreateMessage.run(
+        mode="update",
+        message=message,
+        message_group_uuid=message_group_uuid,
+        cognito_user_id=g.cognito_user_id
+      )
+    return model_json(model)
+```
 
 `backend-flask/routes/users.py`:
 - This is a new file that defines the route handlers for user-related endpoints, such as fetching user activities, fetching user profiles, and updating user profiles.
 - The existing route handlers for user activities and fetching user profiles have been moved to this file.
 - The `model_json` helper function is imported and used to return the appropriate JSON response.
+
+```py
+## flask
+from flask import request, g
+
+## decorators
+from aws_xray_sdk.core import xray_recorder
+from lib.cognito_jwt_token import jwt_required
+from flask_cors import cross_origin
+
+## services 
+from services.users_short import UsersShort
+from services.update_profile import UpdateProfile
+from services.user_activities import UserActivities
+
+## helpers
+from lib.helpers import model_json
+
+def load(app):
+  @app.route("/api/activities/@<string:handle>", methods=['GET'])
+  #@xray_recorder.capture('activities_users')
+  def data_handle(handle):
+    model = UserActivities.run(handle)
+    return model_json(model)
+
+  @app.route("/api/users/@<string:handle>/short", methods=['GET'])
+  def data_users_short(handle):
+    data = UsersShort.run(handle)
+    return data, 200
+
+  @app.route("/api/profile/update", methods=['POST','OPTIONS'])
+  @cross_origin()
+  @jwt_required()
+  def data_update_profile():
+    bio          = request.json.get('bio',None)
+    display_name = request.json.get('display_name',None)
+    model = UpdateProfile.run(
+      cognito_user_id=g.cognito_user_id,
+      bio=bio,
+      display_name=display_name
+    )
+    return model_json(model)   
+```
 
 ## Implement Replies for Posts
 
@@ -897,37 +1591,169 @@ Backend Flask:
 - The `migrate_sql()` method alters the column type to UUID, while the `rollback_sql()` method alters it back to integer.
 - The `migrate()` method executes the migration SQL statement.
 - The `rollback()` method executes the rollback SQL statement.
+ 
+```py
+from lib.db import db
+
+class ReplyToActivityUuidToStringMigration:
+  def migrate_sql():
+    data = """
+    ALTER TABLE activities
+    ALTER COLUMN reply_to_activity_uuid TYPE uuid USING reply_to_activity_uuid::uuid;
+    """
+    return data
+  def rollback_sql():
+    data = """
+    ALTER TABLE activities
+    ALTER COLUMN reply_to_activity_uuid TYPE integer USING (reply_to_activity_uuid::integer);
+    """
+    return data
+
+  def migrate():
+    db.query_commit(ReplyToActivityUuidToStringMigration.migrate_sql(),{
+    })
+
+  def rollback():
+    db.query_commit(ReplyToActivityUuidToStringMigration.rollback_sql(),{
+    })
+
+migration = ReplyToActivityUuidToStringMigration
+```
 
 `backend-flask/db/sql/activities/home.sql`:
 - Added a subquery in the SELECT statement to retrieve replies for each activity.
 - The subquery selects relevant fields from the activities table and joins it with the users table to get user information.
 - The subquery is aliased as `replies` and returned as a JSON array of objects named `replies` in the main query result.
+ 
+```sql
+  activities.created_at,
+  (SELECT COALESCE(array_to_json(array_agg(row_to_json(array_row))),'[]'::json) FROM (
+  SELECT
+    replies.uuid,
+    reply_users.display_name,
+    reply_users.handle,
+    replies.message,
+    replies.replies_count,
+    replies.reposts_count,
+    replies.likes_count,
+    replies.reply_to_activity_uuid,
+    replies.created_at
+  FROM public.activities replies
+  LEFT JOIN public.users reply_users ON reply_users.uuid = replies.user_uuid
+  WHERE 
+    replies.reply_to_activity_uuid = activities.uuid
+  ORDER BY activities.created_at ASC
+  ) array_row) as replies
+```
 
 `backend-flask/db/sql/activities/object.sql`:
 - Added the `reply_to_activity_uuid` field in the SELECT statement to retrieve the reply's activity UUID.
 - This change includes the `reply_to_activity_uuid` in the returned result for object activities.
 
+```sql
+  users.handle,
+  activities.message,
+  activities.created_at,
+  activities.expires_at,
+  activities.reply_to_activity_uuid
+FROM public.activities
+INNER JOIN public.users ON users.uuid = activities.user_uuid 
+WHERE 
+```
+
 `backend-flask/db/sql/activities/reply.sql`:
 - This file contains an SQL statement for inserting a new reply into the activities table.
 - The statement includes columns `user_uuid`, `message`, and `reply_to_activity_uuid`, which are populated with the provided values.
+ 
+```sql
+INSERT INTO public.activities (
+  user_uuid,
+  message,
+  reply_to_activity_uuid
+)
+VALUES (
+  (SELECT uuid 
+    FROM public.users 
+    WHERE users.cognito_user_id = %(cognito_user_id)s
+    LIMIT 1
+  ),
+  %(message)s,
+  %(reply_to_activity_uuid)s
+) RETURNING uuid;
+```
 
 `backend-flask/routes/activities.py`:
 - Updated the `data_activities_reply()` route to use the authenticated user's `cognito_user_id` instead of a hardcoded value.
 - The `cognito_user_id` is obtained from the JWT token present in the request headers.
 - This change ensures that the reply is associated with the correct user.
+ 
+```py
+  @app.route("/api/activities/<string:activity_uuid>/reply", methods=['POST','OPTIONS'])
+  @cross_origin()
+  @jwt_required()
+  def data_activities_reply(activity_uuid):
+    message = request.json['message']
+    model = CreateReply.run(message, g.cognito_user_id, activity_uuid)
+    return model_json(model)
+```
 
 `backend-flask/services/create_reply.py`:
 - Updated the `run()` method of the `CreateReply` class to use the `cognito_user_id` parameter instead of `user_handle`.
+
+```py
+class CreateReply:
+  def run(message, cognito_user_id, activity_uuid):
+    model = {
+      'errors': None,
+      'data': None
+    }
+
+    if cognito_user_id == None or len(cognito_user_id) < 1:
+      model['errors'] = ['cognito_user_id_blank']
+```
+  
 - The `create_reply()` method creates a new reply in the database, using the `cognito_user_id`, `activity_uuid`, and `message`.
+
+```py
+  def create_reply(cognito_user_id, activity_uuid, message):
+    sql = db.template('activities','reply')
+    uuid = db.query_commit(sql,{
+      'cognito_user_id': cognito_user_id,
+      'reply_to_activity_uuid': activity_uuid,
+      'message': message
+    })
+    return uuid
+```
+
 - The `query_object_activity()` method queries the database for the newly created reply and returns the result as JSON.
+
+```py
+  def query_object_activity(uuid):
+    sql = db.template('activities','object')
+    return db.query_object_json(sql,{
+      'uuid': uuid
+    })
+```
 
 Migrations:
 - The `set_last_successful_run()` and `get_last_successful_run()` functions in the `bin/db/migrate` and `bin/db/rollback` scripts were modified to convert the last successful run time to/from an integer for consistency.
 - The integer conversion ensures correct comparison with migration file timestamps.
+ 
+```sh
+return int(value)
+```
+
+```sh
+set_last_successful_run(str(file_time))
+```
 
 Generation:
 - The `bin/generate/migration` script now generates a migration file based on the provided class name (`{klass}Migration`).
 - The migration file template is updated to include the correct class name and migration SQL statements.
+
+```sh
+migration = {klass}Migration
+```
 
 Frontend React JS:
 `frontend-react-js/src/components/ActivityActionReply.js`:
@@ -937,13 +1763,76 @@ Frontend React JS:
 `frontend-react-js/src/components/ActivityItem.css`:
 - Added new styles for the replies section, including padding and background color.
 
+```css
+.activity_item {
+  display: flex;
+  flex-direction: column;
+  border-bottom: solid 1px rgb(60, 54, 79);
+  overflow: hidden;
+}
+
+.replies {
+  padding-left: 24px;
+  background: rgba(255,255,255,0.15);
+}
+.replies .activity_item{
+  background: var(--fg);
+}
+
+.activity_main {  
+  padding: 16px;
+}
+
+.activity_item:last-child {
+  border-bottom: none;
+}
+```
+
 `frontend-react-js/src/components/ActivityItem.js`:
 - Wrapped the content and actions of each activity in a div element with the class `activity_main`.
 - This change allows applying styles specifically to the activity's content and actions section.
 
+```js
+  return (
+    <div className='activity_item'>
+      <div className="activity_main">
+        <ActivityContent activity={props.activity} />
+        <div className="activity_actions">
+          <ActivityActionReply setReplyActivity={props.setReplyActivity} activity={props.activity} setPopped={props.setPopped} activity_uuid={props.activity.uuid} count={props.activity.replies_count}/>
+          <ActivityActionRepost activity_uuid={props.activity.uuid} count={props.activity.reposts_count}/>
+          <ActivityActionLike activity_uuid={props.activity.uuid} count={props.activity.likes_count}/>
+          <ActivityActionShare activity_uuid={props.activity.uuid} />
+        </div>
+      </div>
+      {replies}
+    </div>
+```
+
 `frontend-react-js/src/components/ReplyForm.js`:
 - Updated the `handleSubmit()` method to include the `activity_uuid` when submitting the reply form.
 - The `activity_uuid` is now sent along with the user's reply message when creating a new reply.
+
+```js
+  const onsubmit = async (event) => {
+    console.log('replyActivity', props.activity)
+    event.preventDefault();
+    try {
+      const backend_url = `${process.env.REACT_APP_BACKEND_URL}/api/activities/${props.activity.uuid}/reply`
+      await getAccessToken()
+      const access_token = localStorage.getItem("access_token")
+      const res = await fetch(backend_url, {
+        method: "POST",
+        headers: {
+          'Authorization': `Bearer ${access_token}`,
+          'Accept': 'application/json',
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          activity_uuid: props.activity.uuid, 
+          message: message
+        }),
+      });
+```
 
 ## Improved Error Handling for the app
 
@@ -953,6 +1842,41 @@ Backend Flask:
 
 `backend-flask/db/sql/activities/show.sql`:
 - This file is now a copy of the `home.sql` file, except for the addition of a WHERE clause to filter activities by UUID.
+ 
+```sql
+SELECT
+  activities.uuid,
+  users.display_name,
+  users.handle,
+  activities.message,
+  activities.replies_count,
+  activities.reposts_count,
+  activities.likes_count,
+  activities.reply_to_activity_uuid,
+  activities.expires_at,
+  activities.created_at,
+  (SELECT COALESCE(array_to_json(array_agg(row_to_json(array_row))),'[]'::json) FROM (
+  SELECT
+    replies.uuid,
+    reply_users.display_name,
+    reply_users.handle,
+    replies.message,
+    replies.replies_count,
+    replies.reposts_count,
+    replies.likes_count,
+    replies.reply_to_activity_uuid,
+    replies.created_at
+  FROM public.activities replies
+  LEFT JOIN public.users reply_users ON reply_users.uuid = replies.user_uuid
+  WHERE 
+    replies.reply_to_activity_uuid = activities.uuid
+  ORDER BY activities.created_at ASC
+  ) array_row) as replies
+FROM public.activities
+LEFT JOIN public.users ON users.uuid = activities.user_uuid
+WHERE activities.uuid = %(uuid)s
+ORDER BY activities.created_at DESC
+```
 
 `backend-flask/services/create_message.py`:
 - The error message for exceeding the maximum character limit has been updated from `message_exceed_max_chars` to `message_exceed_max_chars_1024`.
@@ -966,43 +1890,316 @@ Frontend React JS:
 
 `frontend-react-js/src/components/ActivityFeed.css`:
 - A new CSS class called `.activity_feed_primer` has been added.
+ 
+```css
+.activity_feed_primer {
+  font-size: 20px;
+  text-align: center;
+  padding: 24px;
+  color: rgba(255,255,255,0.3)
+}
+```
 
 `frontend-react-js/src/components/ActivityFeed.js`:
 - The rendering of the activity feed has been updated to display a primer message when there are no activities to show.
+ 
+```js
+export default function ActivityFeed(props) {
+  let content;
+  if (props.activities.length === 0){
+    content = <div className='activity_feed_primer'>
+      <span>Nothing to see here yet.</span>
+    </div>
+  } else {
+    content = <div className='activity_feed_collection'>
+      {props.activities.map(activity => {
+      return  <ActivityItem setReplyActivity={props.setReplyActivity} setPopped={props.setPopped} key={activity.uuid} activity={activity} />
+      })}
+    </div>
+  }
+
+
+  return (<div>
+    {content}
+  </div>
+  );
+}
+```
 
 `frontend-react-js/src/components/ActivityForm.js`:
 - The error handling for creating a new activity has been updated to use a post request helper function and handle errors.
+ 
+```js
+    post(url,payload_data,setErrors,function(data){
+      // add activity to the feed
+      props.setActivities(current => [data,...current]);
+      // reset and close the form
+      setCount(0)
+      setMessage('')
+      setTtl('7-days')
+      props.setPopped(false)
+    })
+```
+
 - The error messages are now displayed using a new component called `FormErrors`.
+ 
+```js
+          </div>
+          <FormErrors errors={errors} />          
+        </div>
+```
 
 `frontend-react-js/src/components/FormErrorItem.js`:
 - A new component has been added to render individual error messages.
+ 
+```js
+export default function FormErrorItem(props) {
+    const render_error = () => {
+      switch (props.err_code)  {
+        case 'generic_500':
+          return "An internal server error has occurred."
+          break;
+        case 'generic_403':
+          return "You are not authorized to perform this action."
+          break;
+        case 'generic_401':
+          return "You are not authenticated to perform this action."
+          break;
+        // Replies
+        case 'cognito_user_id_blank':
+          return "The user was not provided."
+          break;
+        case 'activity_uuid_blank':
+          return "The post id cannot be blank."
+          break;
+        case 'message_blank':
+          return "The message cannot be blank."
+          break;
+        case 'message_exceed_max_chars_1024':
+          return "The message is too long, it should be less than 1024 characters."
+          break;
+        // Users
+        case 'message_group_uuid_blank':
+          return "The message group cannot be blank."
+          break;
+        case 'user_reciever_handle_blank':
+          return "You need to send a message to a valid user."
+          break;
+        case 'user_reciever_handle_blank':
+          return "You need to send a message to a valid user."
+          break;
+        // Profile
+        case 'display_name_blank':
+          return "The display name cannot be blank."
+          break;
+        default:
+          // In the case for errors returned from Cognito, they 
+          // directly return the error so we just display it.
+          return props.err_code
+          break;
+      }
+    }
+
+    return (
+      <div className="errorItem">
+        {render_error()}
+      </div>
+    )
+  }
+```
 
 `frontend-react-js/src/components/FormErrors.css`:
 - A new CSS file has been added to style the form errors.
 
+```css
+.errors {
+    padding: 16px;
+    border-radius: 8px;
+    background: rgba(255,0,0,0.3);
+    color: rgb(255,255,255);
+    margin-top: 16px;
+    font-size: 14px;
+  }
+```
+
 `frontend-react-js/src/components/FormErrors.js`:
 - A new component has been added to render a list of form errors.
+
+```js
+import './FormErrors.css';
+import FormErrorItem from 'components/FormErrorItem';
+
+export default function FormErrors(props) {
+  let el_errors = null
+
+  if (props.errors.length > 0) {
+    el_errors = (<div className='errors'>
+      {props.errors.map(err_code => {
+        return <FormErrorItem err_code={err_code} />
+      })}
+    </div>)
+  }
+
+  return (
+    <div className='errorsWrap'>
+      {el_errors}
+    </div>
+  )
+}
+```
 
 `frontend-react-js/src/components/MessageForm.js`:
 - The error handling for sending a new message has been updated to use a post request helper function and handle errors.
 - The error messages are now displayed using the `FormErrors` component.
 
+```js
+  const onsubmit = async (event) => {
+    event.preventDefault();
+    const url = `${process.env.REACT_APP_BACKEND_URL}/api/messages`
+    let payload_data = { 'message': message }
+    if (params.handle) {
+      payload_data.handle = params.handle
+    } else {
+      payload_data.message_group_uuid = params.message_group_uuid
+    }
+    post(url,payload_data,setErrors,function(){
+      console.log('data:',data)
+      if (data.message_group_uuid) {
+        console.log('redirect to message group')
+        window.location.href = `/messages/${data.message_group_uuid}`
+      } else {
+        props.setMessages(current => [...current,data]);
+      }
+    })        
+```
+
 `frontend-react-js/src/lib/Requests.js`:
 - Created a new file to contain helper functions for making HTTP requests.
 - Implemented `request` function to handle common logic for making requests.
 - Exported `post`, `put`, `get`, and `destroy` functions to handle different HTTP methods.
+ 
+```js
+import {getAccessToken} from 'lib/CheckAuth';
+
+async function request(method,url,payload_data,setErrors,success){
+  if (setErrors !== null){
+    setErrors('')
+  }
+  let res
+  try {
+    await getAccessToken()
+    const access_token = localStorage.getItem("access_token")
+    const attrs = {
+      method: method,
+      headers: {
+        'Authorization': `Bearer ${access_token}`,
+        'Content-Type': 'application/json'
+      }
+    }
+
+    if (method !== 'GET') {
+      attrs.body = JSON.stringify(payload_data)
+    }
+
+    res = await fetch(url,attrs)
+    let data = await res.json();
+    if (res.status === 200) {
+      success(data)
+    } else {
+      if (setErrors !== null){
+        setErrors(data)
+      }
+      console.log(res,data)
+    }
+  } catch (err) {
+    console.log('request catch',err)
+    if (err instanceof Response) {
+        console.log('HTTP error detected:', err.status); // Here you can see the status.
+        if (setErrors !== null){
+          setErrors([`generic_${err.status}`]) // Just an example. Adjust it to your needs.
+        }
+    } else {
+      if (setErrors !== null){
+        setErrors([`generic_500`]) // For network errors or any other errors
+      }
+    }
+  }
+}
+
+export function post(url,payload_data,setErrors,success){
+  request('POST',url,payload_data,setErrors,success)
+}
+
+export function put(url,payload_data,setErrors,success){
+  request('PUT',url,payload_data,setErrors,success)
+}
+
+export function get(url,setErrors,success){
+  request('GET',url,null,setErrors,success)
+}
+
+export function destroy(url,payload_data,setErrors,success){
+  request('DELETE',url,payload_data,setErrors,success)
+}
+```
 
 `frontend-react-js/src/pages/HomeFeedPage.js`:
 - Added imports for `get` and `checkAuth`.
+ 
+```js
+import {get} from 'lib/Requests';
+import {checkAuth} from 'lib/CheckAuth';
+```
+
 - Modified the `loadData` function to use the `get` function from the `lib/Requests` module.
+ 
+```js
+  const loadData = async () => {
+    const url = `${process.env.REACT_APP_BACKEND_URL}/api/activities/home`
+    get(url,null,function(data){
+      setActivities(data)
+    })
+  }
+```
 
 `frontend-react-js/src/pages/MessageGroupNewPage.js`:
 - Added imports for `get` and `checkAuth`.
+ 
+```js
+import {get} from 'lib/Requests';
+import {checkAuth} from 'lib/CheckAuth';
+```
+
 - Modified the `loadUserShortData` and `loadMessageGroupsData` functions to use the `get` function from the `lib/Requests` module.
+
+```js
+  const loadUserShortData = async () => {
+    const url = `${process.env.REACT_APP_BACKEND_URL}/api/users/@${params.handle}/short`
+    get(url,null,function(data){
+      console.log('other user:',data)
+      setOtherUser(data)
+    })
+  }  
+```
+  
 
 `frontend-react-js/src/pages/MessageGroupPage.js`:
 - Added imports for `get` and `checkAuth`.
+
+```js
+import {get} from 'lib/Requests';
+import {checkAuth} from 'lib/CheckAuth';
+```
+  
 - Modified the `loadMessageGroupsData` function to use the `get` function from the `lib/Requests` module.
+ 
+```js
+  const loadMessageGroupsData = async () => {
+    const url = `${process.env.REACT_APP_BACKEND_URL}/api/message_groups`
+    get(url,null,function(data){
+      setMessageGroups(data)
+    })
+```
 
 These changes indicate the usage of helper functions (`get`, `post`, `put`, `destroy`) from the `lib/Requests` module for making HTTP requests with different methods in the React.js project. The `FormErrors` component is also added to display form errors.
 
@@ -1010,7 +2207,23 @@ These changes indicate the usage of helper functions (`get`, `post`, `put`, `des
 
 Backend Flask:
 `backend-flask/db/migrations/16868683237445111_reply_to_activity_uuid_to_string.py`:
-- Changed the data type of the `reply_to_activity_uuid` column in the `activities` table from `uuid` to `integer`.
+- Changed the data type of the `reply_to_activity_uuid` column in the `activities` table from `integer` to `uuid`. Then the rollback changes it back.
+
+```py
+class ReplyToActivityUuidToStringMigration:
+  def migrate_sql():
+    data = """
+    ALTER TABLE activities DROP COLUMN reply_to_activity_uuid;
+    ALTER TABLE activities ADD COLUMN reply_to_activity_uuid uuid;
+    """
+    return data
+  def rollback_sql():
+    data = """
+    ALTER TABLE activities DROP COLUMN reply_to_activity_uuid;
+    ALTER TABLE activities ADD COLUMN reply_to_activity_uuid integer;
+    """
+    return data
+```
 
 `backend-flask/db/sql/activities/home.sql`:
 - Removed the trailing comma after `activities.created_at`.
@@ -1018,11 +2231,37 @@ Backend Flask:
 `backend-flask/db/sql/activities/show.sql`:
 - Restructured the SQL query to use a subquery and return the result as the `activity` field.
 
+```sql
+SELECT
+  (SELECT COALESCE(row_to_json(object_row),'{}'::json) FROM (
+    SELECT
+      activities.uuid,
+      users.display_name,
+      users.handle,
+      activities.message,
+      activities.replies_count,
+      activities.reposts_count,
+      activities.likes_count,
+      activities.expires_at,
+      activities.created_at
+  ) object_row) as activity,
+  (SELECT COALESCE(array_to_json(array_agg(row_to_json(array_row))),'[]'::json) FROM (
+  SELECT
+    replies.uuid,
+```
+
 `backend-flask/routes/activities.py`:
 - Removed the `data_show_activity` route.
 
 `backend-flask/routes/users.py`:
 - Added a new route `data_show_activity` to retrieve a specific activity for a user.
+
+```py
+  @app.route("/api/activities/@<string:handle>/status/<string:activity_uuid>", methods=['GET'])
+  def data_show_activity(handle,activity_uuid):
+    data = ShowActivity.run(activity_uuid)
+    return data, 200
+```
 
 `backend-flask/services/show_activities.py`:
 - Renamed to `backend-flask/services/show_activity.py`.
@@ -1031,55 +2270,241 @@ Frontend React JS:
 `frontend-react-js/src/App.js`:
 - Added a new route `ActivityShowPage` to display a specific activity.
 
+```js
+  {
+    path: "/@:handle/status/:activity_uuid",
+    element: <ActivityShowPage />
+  },  
+```
+
 `frontend-react-js/src/components/ActivityActionLike.js`:
 - Added `event.preventDefault()` to prevent the default behavior of the click event.
 - Added `return false` to prevent further event propagation.
+
+```js
+export default function ActivityActionLike(props) { 
+  const onclick = (event) => {
+    event.preventDefault()    
+    console.log('toggle like/unlike')
+    return false
+  }
+```
 
 `frontend-react-js/src/components/ActivityActionReply.js`:
 - Added `event.preventDefault()` to prevent the default behavior of the click event.
 - Added `return false` to prevent further event propagation.
 
+```js
+export default function ActivityActionReply(props) { 
+  const onclick = (event) => {
+    event.preventDefault()    
+    props.setReplyActivity(props.activity)
+    props.setPopped(true)
+    return false    
+  }
+```
+
 `frontend-react-js/src/components/ActivityActionRepost.js`:
 - Added `event.preventDefault()` to prevent the default behavior of the click event.
 - Added `return false` to prevent further event propagation.
+
+```js
+export default function ActivityActionRepost(props) { 
+  const onclick = (event) => {
+    event.preventDefault()    
+    console.log('trigger repost')
+    return false    
+  }
+```
 
 `frontend-react-js/src/components/ActivityActionShare.js`:
 - Added `event.preventDefault()` to prevent the default behavior of the click event.
 - Added `return false` to prevent further event propagation.
 
+```js
+export default function ActivityActionRepost(props) { 
+  const onclick = (event) => {
+    event.preventDefault()    
+    console.log('trigger share')
+    return false    
+  }
+```
+
 `frontend-react-js/src/components/ActivityContent.css`:
 - Changed the CSS selector from `.activity_content a.activity_identity` to `.activity_content .activity_identity`.
 - Modified the styles for `.activity_identity` and its child elements.
+
+```css
+.activity_content .activity_identity {
+  flex-grow: 1;
+  text-decoration: none;
+  font-size: 16px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+.activity_content .activity_identity a {
+  text-decoration: none;
+  display: block;
+  flex-shrink: 1;
+}
+
+.activity_content .activity_identity .display_name {
+  font-weight: 800;
+  color: #fff;
+}
+
+.activity_content .activity_identity .display_name:hover {
+  text-decoration: underline;
+}
+
+.activity_content  .activity_identity .handle {
+  color: rgb(255,255,255,0.5);
+}
+```
 
 `frontend-react-js/src/components/ActivityContent.js`:
 - Replaced the `<div>` element with a `<Link>` component for the `activity_avatar` element.
 - Modified the structure and classes of the `activity_identity` element.
 
+```js
+  return (
+    <div className='activity_content_wrap'>
+      <Link className='activity_avatar'to={`/@`+props.activity.handle} ></Link>
+      <div className='activity_content'>
+        <div className='activity_meta'>
+        <div className='activity_identity' >
+            <Link className='display_name' to={`/@`+props.activity.handle}>{props.activity.display_name}</Link>
+            <Link className="handle" to={`/@`+props.activity.handle}>@{props.activity.handle}</Link>
+          </div>{/* activity_identity */}
+          <div className='activity_times'>
+            <div className="created_at" title={format_datetime(props.activity.created_at)}>
+              <span className='ago'>{time_ago(props.activity.created_at)}</span> 
+```
+
 `frontend-react-js/src/components/ActivityForm.js`:
 - Refactored the `post` function call to include an options object instead of individual parameters.
-- Added an `auth` property with a value of `true` to the options object.
 - Added a `success` property with a callback function to handle the successful response.
+
+```js
+    post(url,payload_data,{
+      auth: true,
+      setErrors: setErrors,
+      success: function(data){
+        // add activity to the feed
+        props.setActivities(current => [data,...current]);
+        // reset and close the form
+        setCount(0)
+        setMessage('')
+        setTtl('7-days')
+        props.setPopped(false)
+      }
+```
 
 `frontend-react-js/src/components/ActivityItem.css`:
 - Added styles for the `.activity_item` class and its `:hover` state.
 
+```css
+a.activity_item {
+  text-decoration: none;
+}
+a.activity_item:hover {
+  background: rgba(255,255,255,0.15);
+}
+```
+
 `frontend-react-js/src/components/ActivityItem.js`:
 - Imported the `Link` component from `react-router-dom`.
+ 
+```js
+import { Link } from "react-router-dom";
+```
+
 - Wrapped the entire `ActivityItem` component with a `Link` component to create a clickable link to the activity.
 - Removed the `replies` variable, which was previously used to render replies within the component.
 
+```js
+    <Link className='activity_item' to={`/@${props.activity.handle}/status/${props.activity.uuid}`}>
+      <div className="activity_main">
+        <ActivityContent activity={props.activity} />
+        <div className="activity_actions">
+          <ActivityActionReply setReplyActivity={props.setReplyActivity} activity={props.activity} setPopped={props.setPopped} activity_uuid={props.activity.uuid} count={props.activity.replies_count}/>
+          <ActivityActionRepost activity_uuid={props.activity.uuid} count={props.activity.reposts_count}/>
+          <ActivityActionLike activity_uuid={props.activity.uuid} count={props.activity.likes_count}/>
+          <ActivityActionShare activity_uuid={props.activity.uuid} />
+        </div>
+      </div>
+      </Link>
+```
+
 `frontend-react-js/src/components/MessageForm.js`:
 - Refactored the `post` function call to include an options object instead of individual parameters.
-- Added an `auth` property with a value of `true` to the options object.
 - Added a `success` property with a callback function to handle the successful response.
+
+```js
+    post(url,payload_data,{
+      auth: true,
+      setErrors: setErrors,
+      success: function(){
+        console.log('data:',data)
+        if (data.message_group_uuid) {
+          console.log('redirect to message group')
+          window.location.href = `/messages/${data.message_group_uuid}`
+        } else {
+          props.setMessages(current => [...current,data]);
+        }
+```
 
 `frontend-react-js/src/components/ProfileForm.js`:
 - Refactored the `put` function call to include an options object instead of individual parameters.
-- Added an `auth` property with a value of `true` to the options object.
 - Added a `success` property with a callback function to handle the successful response.
+
+```js
+    put(url,payload_data,{
+      auth: true,
+      setErrors: setErrors,
+      success: function(data){
+        setBio(null)
+        setDisplayName(null)
+        props.setPopped(false)
+      }
+```
 
 `frontend-react-js/src/components/Replies.css` and `frontend-react-js/src/components/Replies.js`:
 - These files define the styles and component for rendering replies to an activity.
+
+```js
+import './Replies.css';
+
+import ActivityItem from './ActivityItem';
+
+export default function Replies(props) {
+  console.log('replies-props',props)
+  let content;
+  if (props.replies.length === 0){
+    content = <div className='replies_primer'>
+      <span>Nothing to see here yet</span>
+    </div>
+  } else {
+    content = <div className='activities_feed_collection'>
+      {props.replies.map(activity => {
+      return  <ActivityItem 
+          setReplyActivity={props.setReplyActivity}
+          setPopped={props.setPopped}
+          key={activity.uuid}
+          activity={activity} 
+        />
+      })}
+    </div>
+  }
+
+  return (<div>
+    {content}
+  </div>
+  );
+}
+```
 
 `ReplyForm.js`:
 - Added a new `options` parameter to the `post` function call in the `onsubmit` function.
@@ -1092,21 +2517,117 @@ Frontend React JS:
 - Updated the `loadData` function to fetch a specific activity using the `handle` and `activity_uuid` parameters from the URL.
 - Updated the JSX code to render the fetched activity and its replies using the `ActivityItem` and `Replies` components.
 
+```js
+    const payload_data = {
+      activity_uuid: props.activity.uuid,
+      message: message
+    }
+    post(url,payload_data,{
+      auth: true,
+      setErrors: setErrors,
+      success: function(data){
+        // add activity to the feed
+        //let activities_deep_copy = JSON.parse(JSON.stringify(props.activities))
+        //let found_activity = activities_deep_copy.find(function (element) {
+        //  return element.uuid ===  props.activity.uuid;
+        //});
+        //found_activity.replies.push(data)
+        //props.setActivities(activities_deep_copy);
+        // reset and close the form
+        setCount(0)
+        setMessage('')
+        props.setPopped(false)
+      }
+```
+
 `HomeFeedPage.js`:
 - Updated the `loadData` function to fetch activities with authentication.
 - Removed the `setActivities` prop from the `ReplyForm` component.
 
+```js
+  const loadData = async () => {
+    const url = `${process.env.REACT_APP_BACKEND_URL}/api/activities/home`
+    get(url,{
+      auth: true,
+      success: function(data){
+        setActivities(data)
+      }
+    })
+  }
+```
+
 `MessageGroupNewPage.js`:
 - Updated the `loadUserShortData` and `loadMessageGroupsData` functions to fetch data with authentication.
+
+```js
+  const loadUserShortData = async () => {
+    const url = `${process.env.REACT_APP_BACKEND_URL}/api/users/@${params.handle}/short`
+    get(url,{
+      auth: true,
+      success: function(data){
+        console.log('other user:',data)
+        setOtherUser(data)
+      }
+    })
+  }  
+
+  const loadMessageGroupsData = async () => {
+    const url = `${process.env.REACT_APP_BACKEND_URL}/api/message_groups`
+    get(url,{
+      auth: true,
+      success: function(data){
+        setMessageGroups(data)
+      }
+    })
+  };  
+```
 
 `MessageGroupsPage.js`:
 - Updated the `loadData` function to fetch message groups with authentication.
 
+```js
+  const loadData = async () => {
+    const url = `${process.env.REACT_APP_BACKEND_URL}/api/message_groups`
+    get(url,{
+      auth: true,
+      success: function(data){
+        setMessageGroups(data)
+      }
+    })
+  }
+```
+
 `NotificationsFeedPage.js`:
 - Updated the `loadData` function to fetch notifications activities with authentication.
 
+```js
+  const loadData = async () => {
+    const url = `${process.env.REACT_APP_BACKEND_URL}/api/activities/notifications`
+    get(url,{
+      auth: true,
+      success: function(data){
+        setActivities(data)
+      }
+    })
+  }
+```
+
 `UserFeedPage.js`:
 - Updated the `loadData` function to fetch user activities without authentication.
+
+```js
+  const loadData = async () => {
+    const url = `${process.env.REACT_APP_BACKEND_URL}/api/activities/@${params.handle}`
+    get(url,{
+      auth: false,
+      success: function(data){
+        console.log('setprofile',data.profile)
+        setProfile(data.profile)
+        setActivities(data.activities)
+      }
+    })
+  }
+```
 
 ## More General Cleanup Part 1 and Part 2
 
@@ -1116,6 +2637,16 @@ Modified `backend-flask/db/seed.sql` file:
 
 Modified `backend-flask/services/show_activity.py` file:
 - Changed `db.query_array_json` to `db.query_object_json`.
+
+```py
+  def run(activity_uuid):
+
+    sql = db.template('activities','show')
+    results = db.query_object_json(sql,{
+      'uuid': activity_uuid
+    })
+    return results
+```
 
 Modified `bin/db/migrate` file:
 - Added a print statement to display the last successful run.
@@ -1129,21 +2660,128 @@ Modified `frontend-react-js/src/components/ActivityContent.js` file:
 - Imported the `time_future` function from the `DateTimeFormats.js` module.
 - Changed the `time_ago` function to `time_future` in the `ActivityContent` component.
 
+```js
+import './ActivityContent.css';
+
+import { Link } from "react-router-dom";
+import { format_datetime, time_ago, time_future } from '../lib/DateTimeFormats';
+import {ReactComponent as BombIcon} from './svg/bomb.svg';
+
+export default function ActivityContent(props) {
+  let expires_at;
+  if (props.activity.expires_at) {
+    expires_at =  <div className="expires_at" title={format_datetime(props.activity.expires_at)}>
+                    <BombIcon className='icon' />
+                    <span className='ago'>{time_future(props.activity.expires_at)}</span>
+                  </div>
+
+  }
+```
+
 Modified `frontend-react-js/src/components/ActivityItem.css` file:
 - Changed the CSS class name from `.activity_item:hover` to `.activity_item.clickable:hover`.
 
+```css
+.activity_item.clickable:hover {
+  cursor: pointer;
+}
+
+.activity_item.clickable:hover {
+  background: rgba(255,255,255,0.15);
+}
+```
+
 Modified `frontend-react-js/src/components/ActivityItem.js` file:
 - Imported the `useNavigate` hook from the `react-router-dom` module.
+ 
+```js
+import { useNavigate } from "react-router-dom";
+```
+
 - Added a `click` function to handle the click event on the activity item.
+ 
+```js
+  const click = (event) => {
+    event.preventDefault()
+    const url = `/@${props.activity.handle}/status/${props.activity.uuid}`
+    navigate(url)
+    return false;
+  }
+```
+
 - Added the `expanded_meta` variable for expanded activity item content.
+ 
+```js
+  let expanded_meta;
+  if (props.expanded === true) {
+
+  }
+```
+
 - Modified the return statement to conditionally apply CSS classes and include the expanded meta content.
+
+```js
+  return (
+    <div {...attrs}>
+      <div className="activity_main">
+        <ActivityContent activity={props.activity} />
+        {expanded_meta}
+        <div className="activity_actions">
+          <ActivityActionReply setReplyActivity={props.setReplyActivity} activity={props.activity} setPopped={props.setPopped} activity_uuid={props.activity.uuid} count={props.activity.replies_count}/>
+          <ActivityActionRepost activity_uuid={props.activity.uuid} count={props.activity.reposts_count}/>
+          <ActivityActionLike activity_uuid={props.activity.uuid} count={props.activity.likes_count}/>
+          <ActivityActionShare activity_uuid={props.activity.uuid} />
+        </div>
+      </div>
+    </div>
+  )
+```
 
 Modified `frontend-react-js/src/components/Replies.js` file:
 - Removed a `console.log` statement.
 
 Modified `frontend-react-js/src/lib/DateTimeFormats.js` file:
 - Added a new function `time_future` to calculate the future time difference.
+ 
+```js
+export function time_future(value){  
+  const datetime = DateTime.fromISO(value, { zone: 'utc' })
+  const future = datetime.setZone(Intl.DateTimeFormat().resolvedOptions().timeZone);
+  const now     = DateTime.now()
+  const diff_mins = future.diff(now, 'minutes').toObject().minutes;
+  const diff_hours = future.diff(now, 'hours').toObject().hours;
+  const diff_days = future.diff(now, 'days').toObject().days;
+
+  if (diff_hours > 24.0){
+    return `${Math.floor(diff_days)}d`;
+  } else if (diff_hours < 24.0 && diff_hours > 1.0) {
+    return `${Math.floor(diff_hours)}h`;
+  } else if (diff_hours < 1.0) {
+    return `${Math.round(diff_mins)}m`;
+  }
+}
+```
+
 - Modified the `time_ago` function to calculate the past time difference.
+ 
+```js
+export function time_ago(value){
+  const datetime = DateTime.fromISO(value, { zone: 'utc' })
+  const past = datetime.setZone(Intl.DateTimeFormat().resolvedOptions().timeZone);
+  const now     = DateTime.now()
+  const diff_mins = now.diff(past, 'minutes').toObject().minutes;
+  const diff_hours = now.diff(past, 'hours').toObject().hours;
+  const diff_days = now.diff(past, 'days').toObject().days;
+
+  if (diff_hours > 24.0){
+    return `${Math.floor(diff_days)}d`;
+  } else if (diff_hours < 24.0 && diff_hours > 1.0) {
+    return `${Math.floor(diff_hours)}h`;
+  } else if (diff_hours < 1.0) {
+    return `${Math.round(diff_mins)}m`;
+  }
+}
+```
 
 Modified `frontend-react-js/src/lib/Requests.js` file:
 - Removed a `console.log` statement.
@@ -1154,6 +2792,64 @@ New Files:
 - Contains a React component for rendering an expanded activity item.
 - Includes HTML structure, CSS class names, and JSX code for displaying activity details and actions.
 
+```js
+import './ActivityItem.css';
+
+import ActivityActionReply  from '../components/ActivityActionReply';
+import ActivityActionRepost  from '../components/ActivityActionRepost';
+import ActivityActionLike  from '../components/ActivityActionLike';
+import ActivityActionShare  from '../components/ActivityActionShare';
+
+import { Link } from "react-router-dom";
+import { format_datetime, time_ago, time_future } from '../lib/DateTimeFormats';
+import {ReactComponent as BombIcon} from './svg/bomb.svg';
+
+export default function ActivityShowItem(props) {
+
+  const attrs = {}
+  attrs.className = 'activity_item expanded'
+  return (
+    <div {...attrs}>
+      <div className="activity_main">
+        <div className='activity_content_wrap'>
+          <div className='activity_content'>
+            <Link className='activity_avatar'to={`/@`+props.activity.handle} ></Link>
+            <div className='activity_meta'>
+              <div className='activity_identity' >
+                <Link className='display_name' to={`/@`+props.activity.handle}>{props.activity.display_name}</Link>
+                <Link className="handle" to={`/@`+props.activity.handle}>@{props.activity.handle}</Link>
+              </div>{/* activity_identity */}
+              <div className='activity_times'>
+                <div className="created_at" title={format_datetime(props.activity.created_at)}>
+                  <span className='ago'>{time_ago(props.activity.created_at)}</span> 
+                </div>
+                <div className="expires_at" title={format_datetime(props.activity.expires_at)}>
+                  <BombIcon className='icon' />
+                  <span className='ago'>{time_future(props.activity.expires_at)}</span>
+                </div>
+              </div>{/* activity_times */}
+            </div>{/* activity_meta */}
+          </div>{/* activity_content */}
+          <div className="message">{props.activity.message}</div>
+        </div>
+
+        <div className='expandedMeta'>
+          <div className="created_at">
+            {format_datetime(props.activity.created_at)}
+          </div>
+        </div>
+        <div className="activity_actions">
+          <ActivityActionReply setReplyActivity={props.setReplyActivity} activity={props.activity} setPopped={props.setPopped} activity_uuid={props.activity.uuid} count={props.activity.replies_count}/>
+          <ActivityActionRepost activity_uuid={props.activity.uuid} count={props.activity.reposts_count}/>
+          <ActivityActionLike activity_uuid={props.activity.uuid} count={props.activity.likes_count}/>
+          <ActivityActionShare activity_uuid={props.activity.uuid} />
+        </div>
+      </div>
+    </div>
+  )
+}
+```
+
 `frontend-react-js/src/components/ProfileHeading.css`:
 - Added `background-color: var(--fg);` to the `.profile_heading .banner` class.
 
@@ -1161,13 +2857,35 @@ Other Changes:
 `frontend-react-js/src/components/ActivityContent.css`:
 - Added `display: block;` to the `.activity_avatar` class.
 
+```css
+.activity_content_wrap .activity_avatar {
+  background: rgb(149,0,255);
+  height: 60px;
+  width: 60px;
+  border-radius: 999px;
+  flex-shrink: 0;
+  display: block;
+}
+```
+
 `frontend-react-js/src/components/ActivityItem.css`:
 - Added new CSS rules for the `.activity_item.expanded .activity_content` and `.activity_item.expanded .activity_content .activity_identity` classes.
+
+```css
+.activity_item.expanded .activity_content {
+  display: flex;
+}
+.activity_item.expanded .activity_content .activity_identity{
+  flex-grow: 1;
+}
+```
 
 `frontend-react-js/src/components/ActivityItem.js`:
 - Simplified the logic related to `props.expanded`.
 - Always adds the `expanded` class to the `activity_item` element.
 - Assigned the `click` function to the `onClick` event.
+
+![image](https://github.com/jhargett1/aws-bootcamp-cruddur-2023/assets/119984652/6b747b69-fa8b-4efb-b3dd-e654915192fd)
 
 `frontend-react-js/src/pages/ActivityShowPage.css`:
 - Added new CSS rules for the `.back`, `.activity_feed_heading.flex`, and `.activity_feed_heading.flex .title` classes.
@@ -1183,48 +2901,180 @@ Other Changes:
 `frontend-react-js/src/components/MessageForm.js`:
   - Added an `errors` state variable to store any form submission errors.
 
+```js
+const [errors, setErrors] = React.useState('');
+```
+
 `frontend-react-js/src/components/MessageGroupItem.js`:
   - Changed the format of the timestamp display to `<span className='ago'>{message_time_ago(props.message_group.created_at)}</span>`.
 
 `frontend-react-js/src/components/ProfileForm.js`:
   - Added an `errors` state variable to store any form submission errors.
 
+```js
+const [errors, setErrors] = React.useState('');
+```
+
 `frontend-react-js/src/lib/Requests.js`:
   - Updated to allow the `setErrors` option to be null, meaning the `setErrors` function will not be called if null.
+
+```js
+      if (options.setErrors !== null){
+        options.setErrors(data)
+      }
+```
 
 `erb/sync.env.erb`:
   - Updated the `SYNC_OUTPUT_CHANGESET_PATH` variable to point to the new file `changeset.json`, used to store the changeset when the project is synced to S3.
 
+```erb
+SYNC_S3_BUCKET=thejoshdev.com
+SYNC_CLOUDFRONT_DISTRUBTION_ID=E10S9HTQK39WH9
+SYNC_BUILD_DIR=<%= ENV['THEIA_WORKSPACE_ROOT'] %>/frontend-react-js/build
+SYNC_OUTPUT_CHANGESET_PATH=<%= ENV['THEIA_WORKSPACE_ROOT'] %>/tmp/changeset.json
+SYNC_AUTO_APPROVE=false
+```
+
 `aws/cfn/service/config.toml`:
   - Added a new parameter called `DDBMessageTable` to specify the name of the DynamoDB table for storing messages.
+
+```toml
+DDBMessageTable = 'CrdDdb-DynamoDBTable-1XAZLLSMMFD6Q'
+```
 
 `aws/cfn/service/template.yaml`:
   - Added a new resource called `DDBMessageTable` to create a DynamoDB table for storing messages.
 
+```yaml
+  DDBMessageTable:
+    Type: String
+    Default: cruddur-messages  
+```
+
 `backend-flask/lib/ddb.py`:
   - Used the `DDBMessageTable` environment variable to specify the name of the DynamoDB table for storing messages.
+
+```py
+  def list_message_groups(client,my_user_uuid):
+    year = str(datetime.now().year)
+    table_name = os.getenv("DDB_MESSAGE_TABLE")
+```
 
 `erb/backend-flask.env.erb`:
   - Added a new variable called `DDBMessageTable` to specify the name of the DynamoDB table for storing messages.
 
+```erb
+AWS_ENDPOINT_URL=http://dynamodb-local:8000
+DDB_MESSAGE_TABLE=cruddur-messages
+CONNECTION_URL=postgresql://postgres:password@db:5432/cruddur
+FRONTEND_URL=https://3000-<%= ENV['GITPOD_WORKSPACE_ID'] %>.<%= ENV['GITPOD_WORKSPACE_CLUSTER_HOST'] %>
+BACKEND_URL=https://4567-<%= ENV['GITPOD_WORKSPACE_ID'] %>.<%= ENV['GITPOD_WORKSPACE_CLUSTER_HOST']
+```
+
 `frontend-react-js/src/components/MessageGroupItem.js`, `frontend-react-js/src/components/MessageGroupNewItem.js`, and `frontend-react-js/src/components/MessageItem.js`:
   - Utilized the `message_group_meta` and `message_meta` components to display the display name and handle of the user who created the message group or message.
+
+```js
+<div className='message_group_meta'>
+```
 
 `aws/cfn/machine-user/config.toml`:
   - Added new variables: `bucket` (specifies the S3 bucket for storing CloudFormation template), `region` (specifies the AWS region for deployment), and `stack_name` (specifies the name of the CloudFormation stack).
 
+```toml
+[deploy]
+bucket = 'jh-cfn-artifacts'
+region = 'us-east-1'
+stack_name = 'CrdMachineUser'
+```
+
 `aws/cfn/machine-user/template.yaml`:
   - Added a new resource `CruddurMachineUser` to create an IAM user with full access to DynamoDB.
   - Added a new resource `DynamoDBFullAccessPolicy` to attach a policy to `CruddurMachineUser` granting full access to DynamoDB.
+   
+```yaml
+AWSTemplateFormatVersion: '2010-09-09'
+Resources:
+  CruddurMachineUser:
+    Type: 'AWS::IAM::User'
+    Properties: 
+      UserName: 'cruddur_machine_user'
+  DynamoDBFullAccessPolicy: 
+    Type: 'AWS::IAM::Policy'
+    Properties: 
+      PolicyName: 'DynamoDBFullAccessPolicy'
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement: 
+          - Effect: Allow
+            Action: 
+              - dynamodb:PutItem
+              - dynamodb:GetItem
+              - dynamodb:Scan
+              - dynamodb:Query
+              - dynamodb:UpdateItem
+              - dynamodb:DeleteItem
+              - dynamodb:BatchWriteItem
+            Resource: '*'
+      Users:
+        - !Ref CruddurMachineUser
+```
 
 `bin/cfn/machineuser`:
   - Created a script to deploy the `CrdMachineUser` stack.
+
+```sh
+#! /usr/bin/env bash
+set -e # stop the execution of the script if it fails
+
+CFN_PATH="/workspace/aws-bootcamp-cruddur-2023/aws/cfn/machine-user/template.yaml"
+CONFIG_PATH="/workspace/aws-bootcamp-cruddur-2023/aws/cfn/machine-user/config.toml"
+echo $CFN_PATH
+
+cfn-lint $CFN_PATH
+
+BUCKET=$(cfn-toml key deploy.bucket -t $CONFIG_PATH)
+REGION=$(cfn-toml key deploy.region -t $CONFIG_PATH)
+STACK_NAME=$(cfn-toml key deploy.stack_name -t $CONFIG_PATH)
+
+aws cloudformation deploy \
+  --stack-name $STACK_NAME \
+  --s3-bucket $BUCKET \
+  --s3-prefix db \
+  --region $REGION \
+  --template-file "$CFN_PATH" \
+  --no-execute-changeset \
+  --tags group=cruddur-machine-user \
+  --capabilities CAPABILITY_NAMED_IAM
+```
 
 `erb/backend-flask.env.erb`:
   - Commented out the `AWS_ENDPOINT_URL` variable since the `CrdMachineUser` stack will provide a production-grade DynamoDB endpoint.
 
 `frontend-react-js/src/pages/MessageGroupPage.js`:
   - Updated the GET request to include `auth: true` to restrict API access to authenticated users.
+
+```js
+  const loadMessageGroupsData = async () => {
+    const url = `${process.env.REACT_APP_BACKEND_URL}/api/message_groups`
+    get(url,{
+      auth: true,
+      success: function(data){
+        setMessageGroups(data)
+      }
+    })
+  } 
+
+  const loadMessageGroupData = async () => {
+    const url = `${process.env.REACT_APP_BACKEND_URL}/api/messages/${params.message_group_uuid}`
+    get(url,{
+      auth: true,
+      success: function(data){
+        setMessages(data)
+      }
+    })
+  }  
+```
 
 ## Other changes and updates
 
@@ -1234,27 +3084,55 @@ I am still working on a way to get replies to Cruds to delete at the same time a
 
 `backend-flask/db/sql/activities/delete.sql`:
   - Added a SQL query to delete old activities from the database. The query deletes activities with an `expires_at` value less than the current time minus the TTL.
+  - Modified the WHERE clause of the DELETE statement to compare the `expires_at` value with the current time.
+
+```sql
+DELETE FROM activities
+WHERE expires_at < now();
+```
 
 `backend-flask/routes/activities.py`:
   - Updated the `data_home()` function to invoke the `delete_old_activities()` function from the `CreateActivity` class. This ensures regular deletion of old activities from the database.
 
+```py
+  @jwt_required(on_error=default_home_feed)
+  def data_home():
+      data = HomeActivities.run(cognito_user_id=g.cognito_user_id)
+      CreateActivity.delete_old_activities('12-hours')
+      return data, 200
+```
+
 `backend-flask/services/create_activity.py`:
   - Added a new function `delete_old_activities()` to delete expired activities from the database. The function accepts a TTL (time to live) value and calculates the expiration time using the `datetime` and `timedelta` modules.
 
+```py
+  def delete_old_activities(ttl):
+    now = datetime.now(timezone.utc).astimezone()
+    expires_at = (now - timedelta(hours=12)).astimezone(timezone.utc)
+
+    sql = db.template('activities', 'delete')
+    db.query_commit(sql, {
+      'expires_at': expires_at
+    })
+
+    return None
+```
+
 `backend-flask/db/seed.sql`:
   - Added two new rows of seed data to the activities table.
-
-`backend-flask/db/sql/activities/delete.sql`:
-  - Modified the WHERE clause of the DELETE statement to compare the `expires_at` value with the current time.
-
-`backend-flask/services/create_activity.py`:
-  - Added a new function `delete_old_activities()` to delete activities that have expired, based on the provided TTL value.
-
 
 I have also fixed the Profile page, so no matter what user is logged in, the page should display correctly:
 
 `frontend-react-js/src/components/ProfileLink.js`:
   - Updated the `profileLink` property to use the `props.user.handle` prop instead of the hardcoded value `/@joshhargett`. This change ensures that the profile link always points to the user's profile, irrespective of their handle.
+
+```js
+    profileLink = <DesktopNavigationLink 
+      url={`/@`+props.user.handle} 
+      name="Profile"
+      handle="profile"
+      active={props.active} />
+```
 
 In the `ProfileLink` component, the `profileLink` property is used to render a link to the user's profile. The `url` prop of the `DesktopNavigationLink` component determines the `href` of the link. Previously, the `url` prop was hardcoded to the value `/@joshhargett`, resulting in the link always pointing to the profile of the user with the handle "joshhargett", even if a different user was logged in.
 
