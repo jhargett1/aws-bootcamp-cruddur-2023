@@ -16,7 +16,7 @@ def update_users_with_cognito_user_id(handle,sub):
     UPDATE public.users
     SET cognito_user_id = %(sub)s
     WHERE
-      users.handle = %(handle)s;
+      public.users.handle = %(handle)s;
   """
   db.query_commit(sql,{
     'handle' : handle,
