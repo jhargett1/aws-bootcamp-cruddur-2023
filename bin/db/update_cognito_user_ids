@@ -13,7 +13,7 @@ from lib.db import db
 
 def update_users_with_cognito_user_id(handle,sub):                            
   sql = """
-    UPDATE public.users
+    UPDATE users
     SET cognito_user_id = %(sub)s
     WHERE
       users.handle = %(handle)s;
