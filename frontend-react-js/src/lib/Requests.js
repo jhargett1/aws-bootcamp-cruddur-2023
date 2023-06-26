@@ -34,6 +34,8 @@ async function request(method,url,payload_data,options){
       }
       console.log(res,data)
     }
+    return res; // Return the response
+
   } catch (err) {
     console.log('request catch',err)
     if (err instanceof Response) {
@@ -50,17 +52,17 @@ async function request(method,url,payload_data,options){
 }
 
 export function post(url,payload_data,options){
-  request('POST',url,payload_data,options)
+  return request('POST',url,payload_data,options)
 }
 
 export function put(url,payload_data,options){
-  request('PUT',url,payload_data,options)
+  return request('PUT',url,payload_data,options)
 }
 
 export function get(url,options){
-  request('GET',url,null,options)
+  return request('GET',url,null,options)
 }
 
 export function destroy(url,payload_data,options){
-  request('DELETE',url,payload_data,options)
+  return request('DELETE',url,payload_data,options)
 }

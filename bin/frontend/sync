@@ -9,7 +9,7 @@ Dotenv.load(env_path)
 puts "== configuration"
 puts "aws_default_region:   #{ENV["AWS_DEFAULT_REGION"]}"
 puts "s3_bucket:            #{ENV["SYNC_S3_BUCKET"]}"
-puts "distribution_id:      #{ENV["SYNC_CLOUDFRONT_DISTRUBTION_ID"]}"
+puts "distribution_id:      #{ENV["SYNC_CLOUDFRONT_DISTRIBUTION_ID"]}"
 puts "build_dir:            #{ENV["SYNC_BUILD_DIR"]}"
 
 changeset_path = ENV["SYNC_OUTPUT_CHANGESET_PATH"]
