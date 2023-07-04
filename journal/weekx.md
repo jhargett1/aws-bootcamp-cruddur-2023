@@ -3137,3 +3137,133 @@ I have also fixed the Profile page, so no matter what user is logged in, the pag
 In the `ProfileLink` component, the `profileLink` property is used to render a link to the user's profile. The `url` prop of the `DesktopNavigationLink` component determines the `href` of the link. Previously, the `url` prop was hardcoded to the value `/@joshhargett`, resulting in the link always pointing to the profile of the user with the handle "joshhargett", even if a different user was logged in.
 
 The updated code binds the `url` prop of the `DesktopNavigationLink` component to the `props.user.handle` prop. By doing so, the `url` prop is dynamically set to the handle of the current user. This change ensures that the profile link accurately reflects the profile of the logged-in user, regardless of their handle.
+
+## Update 
+
+Reply Cruds now expire and delete at the same time as the post they are replying to. I adjusted the query in 'backend-flask/db/sql/activities/reply.sql' to also insert the `expires_at` value into `public.activities` as well. 
+
+```sql
+INSERT INTO public.activities (
+  user_uuid,
+  message,
+  reply_to_activity_uuid,
+  expires_at
+)
+VALUES (
+  (SELECT uuid 
+    FROM public.users 
+    WHERE users.cognito_user_id = %(cognito_user_id)s
+    LIMIT 1
+  ),
+  %(message)s,
+  %(reply_to_activity_uuid)s,
+  (SELECT expires_at FROM public.activities WHERE uuid = %(reply_to_activity_uuid)s)
+) RETURNING uuid;
+```
+
+With this change, reply Cruds now have an `expires_at` value added to their row in the table, and will therefore delete when expired. I made a few more minor syntax adjustments and continued to review code, as I was trying to get the S3 buckets hooked up to production and working again. After quite a bit of troubleshooting, I found that the value of `gateway_url` for `s3uploadkey` in `frontend-react-js/src/components/ProfileForm.js` was not being passed correctly in production. I could spin up my environment locally and attempt to upload a picture to the Profile page, and this would at least generate a Cloudwatch log for the `CruddurAvatarUpload` Lambda. If I did this in production, it wouldn't even get that far. 
+
+I navigated over to the upload Lambda and viewed the code. After much trial and error, I updated the `Access-Control-Allow-Origin` to my production URL. This caused uploads to fail with a 405 error on the PUT method, so I added PUT to the list of `Access-Control-Allow-Methods` as well. 
+
+```rb
+require 'aws-sdk-s3'
+require 'json'
+require 'jwt'
+
+def handler(event:, context:)
+  puts event
+  # return cors headers for preflight check
+  if event['routeKey'] == "OPTIONS /{proxy+}"
+    puts({step: 'preflight', message: 'preflight CORS check'}.to_json)
+    { 
+      headers: {
+        "Access-Control-Allow-Headers": "*, Authorization",
+        "Access-Control-Allow-Origin": "https://thejoshdev.com",
+        "Access-Control-Allow-Methods": "OPTIONS,GET,POST,PUT"
+      },
+      statusCode: 200
+    }
+  else
+    token = event['headers']['authorization'].split(' ')[1]
+    puts({step: 'presignedurl', access_token: token}.to_json)
+
+    body_hash = JSON.parse(event["body"])
+    extension = body_hash["extension"]
+    puts({ extension: extension }.to_json)
+
+    decoded_token = JWT.decode token, nil, false
+    cognito_user_uuid = decoded_token[0]['sub']
+    puts({ cognito_user_uuid: cognito_user_uuid }.to_json)
+
+    s3 = Aws::S3::Resource.new
+    bucket_name = ENV["UPLOADS_BUCKET_NAME"]
+    object_key = "#{cognito_user_uuid}.#{extension}"
+
+    puts({object_key: object_key}.to_json)
+
+    obj = s3.bucket(bucket_name).object(object_key)
+    url = obj.presigned_url(:put, expires_in: 60 * 5)
+    url # this is the data that will be returned
+    puts({ presigned_url: url }.to_json)
+    body = {url: url}.to_json
+    { 
+      headers: {
+        "Access-Control-Allow-Headers": "*, Authorization",
+        "Access-Control-Allow-Origin": "https://thejoshdev.com",
+        "Access-Control-Allow-Methods": "OPTIONS,GET,POST,PUT"
+      },
+      statusCode: 200, 
+      body: body 
+    }
+  end # if 
+end # def handler
+```
+
+I then navigated over to S3 and accessed my `thejoshdev-uploaded-avatars` bucket. I updated the CORS policy on the bucket to the following: 
+
+```json
+[
+    {
+        "AllowedHeaders": [
+            "*"
+        ],
+        "AllowedMethods": [
+            "PUT",
+            "POST"
+        ],
+        "AllowedOrigins": [
+            "https://thejoshdev.com"
+        ],
+        "ExposeHeaders": [
+            "x-amz-server-side-encryption",
+            "x-amz-request-id",
+            "x-amz-id-2"
+        ],
+        "MaxAgeSeconds": 3000
+    }
+]
+```
+
+Back in `frontend-react-js/src/components/ProfileForm.js` the value of `gateway_url` not being passed correctly, this was due to the fact that in production, we no longer store the `REACT_APP_API_GATEWAY_ENDPOINT_URL` variable, as seen below:
+
+```js
+  const s3uploadkey = async (extension)=> {
+    console.log('ext',extension)
+    try {
+      const gateway_url = `${process.env.REACT_APP_API_GATEWAY_ENDPOINT_URL}/avatars/key_upload`
+      await getAccessToken()
+      const access_token = localStorage.getItem("access_token")
+```
+
+To circumvent this change, I hardcoded in the URL of my API gateway endpoint:
+
+```js
+  const s3uploadkey = async (extension)=> {
+    console.log('ext',extension)
+    try {
+      const gateway_url = `https://d03alefk4f.execute-api.us-east-1.amazonaws.com/avatars/key_upload`
+      await getAccessToken()
+      const access_token = localStorage.getItem("access_token")
+```
+
+I have now tested, and profile images are now uploading again, in production without errors. 
