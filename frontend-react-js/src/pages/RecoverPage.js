@@ -5,29 +5,29 @@ import { Link } from "react-router-dom";
 import { Auth } from 'aws-amplify';
 
 export default function RecoverPage() {
-  // Username is Eamil
+  // Username is Email
   const [username, setUsername] = React.useState('');
   const [password, setPassword] = React.useState('');
   const [passwordAgain, setPasswordAgain] = React.useState('');
   const [code, setCode] = React.useState('');
-  const [errors, setErrors] = React.useState('');
+  const [errors, setErrors] = React.useState([]);
   const [formState, setFormState] = React.useState('send_code');
 
   const onsubmit_send_code = async (event) => {
     event.preventDefault();
-    setErrors('')
+    setErrors([])
     Auth.forgotPassword(username)
     .then((data) => setFormState('confirm_code') )
-    .catch((err) => setErrors(err.message) );
+    .catch((err) => setErrors([err.message]) );
     return false
   }
   const onsubmit_confirm_code = async (event) => {
     event.preventDefault();
-    setErrors('')
+    setErrors([])
     if (password === passwordAgain){
       Auth.forgotPasswordSubmit(username, code, password)
       .then((data) => setFormState('success'))
-      .catch((err) => setErrors(err.message) );
+      .catch((err) => setErrors([err.message]) );
     } else {
       setErrors('Passwords do not match')
     }
