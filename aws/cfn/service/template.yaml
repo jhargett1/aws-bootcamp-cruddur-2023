@@ -50,6 +50,9 @@ Parameters:
   EnvFrontendUrl:
     Type: String
     Default: 'https://thejoshdev.com'
+  FlaskEnv:
+    Type: String
+    Default: 'production'
   EnvBackendUrl:
     Type: String
     Default: 'https://api.thejoshdev.com'
@@ -168,6 +171,8 @@ Resources:
               awslogs-region: !Ref AWS::Region
               awslogs-stream-prefix: !Ref ServiceName
           Environment:
+            - Name: FLASK_ENV
+              Value: !Ref FlaskEnv
             - Name: DDB_MESSAGE_TABLE
               Value: !Ref DDBMessageTable
             - Name: 'OTEL_SERVICE_NAME'
