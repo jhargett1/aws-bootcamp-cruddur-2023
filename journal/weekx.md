@@ -3267,3 +3267,83 @@ To circumvent this change, I hardcoded in the URL of my API gateway endpoint:
 ```
 
 I have now tested, and profile images are now uploading again, in production without errors. 
+
+## Update - Rollbar is now implemented
+
+I have just finished applying the Rollbar fix to implement it into our web app. In `backend-flask/lib/rollbar.py` we added the hack to make request data work with pyrollbar. 
+
+```py
+def _get_flask_request():
+    print("Getting flask request")
+    from flask import request
+    print("request:", request)
+    return request
+rollbar._get_flask_request = _get_flask_request
+
+def _build_request_data(request):
+    return rollbar._build_werkzeug_request_data(request)
+rollbar._build_request_data = _build_request_data
+```
+
+We then defined a variable for the environment name, so it will work in both production and development stages. 
+
+```py
+def init_rollbar(app):
+  rollbar_access_token = os.getenv('ROLLBAR_ACCESS_TOKEN')
+  flask_env = os.getenv('FLASK_ENV')
+  rollbar.init(
+      # access token
+      rollbar_access_token,
+      # environment name
+      flask_env,
+```
+
+In `backend-flask/routes/general.py` we uncommented the `@app.route` we created to test Rollbar.
+
+```py
+  @app.route('/rollbar/test')
+  def rollbar_test():
+    g.rollbar.report_message('Hello World!', 'warning')
+    return "Hello World!"
+```
+
+We updated `erb/backend-flask.env.erb` to pass the `FLASK_ENV` variable for our developement environment.
+
+```erb
+FLASK_ENV=development
+```
+
+In `SigninPage.js`, `RecoverPage.js`, and `SignupPage.js` we updated errors correctly, replacing their empty value to instead return an empty array at start.
+
+```js
+const [errors, setErrors] = React.useState([]);
+```
+
+```js
+  const onsubmit = async (event) => {
+    event.preventDefault();
+    setErrors([])
+```
+
+```js
+    } catch (error) {
+        setErrors([error.message])
+```
+
+We then moved over to the service `template.yaml` and added a parameter for our `FLASK_ENV` variable for Production, and added it to the `Environment` property as well.
+
+```yaml
+  FlaskEnv:
+    Type: String
+    Default: 'production'
+```
+
+```yaml
+          Environment:
+            - Name: FLASK_ENV
+              Value: !Ref FlaskEnv
+```
+
+We then ran our `./bin/cfn/service` script to generate a changeset. We then executed the changeset from CloudFormation in AWS successfully updating the task definition for our `backend-flask` service. 
+
+Rollbar is now successfully implemented in both production and development environments. 
